@@ -1,0 +1,21 @@
+
+# OpenMC generated runtime/output files
+statepoint.*.h5
+summary.h5
+tracks.h5
+volume_*.h5
+*.out
+*.xml
+*.h5
+run/
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# OpenMC runtime outputs
+statepoint.*.h5
+summary.h5
+tracks.h5
+volume_*.h5
+*.out
