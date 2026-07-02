@@ -111,10 +111,7 @@ settings.output = {
 # 350 K ≈ 77°C — approximate operating temperature at 10 MW
 # =============================================================================
 
-settings.temperature = {
-    'default': 293.0,          # Kelvin — cold zero power for fresh core
-    'method': 'interpolation', # interpolate between available cross section temps
-}
+settings.temperature = {'method': 'interpolation'}
 
 # =============================================================================
 # EXPORT SETTINGS TO XML
@@ -129,4 +126,4 @@ if __name__ == '__main__':
     print(f"  Total batches  : {settings.batches}")
     print(f"  Inactive       : {settings.inactive}")
     print(f"  Active         : {settings.batches - settings.inactive}")
-    print(f"  Temperature    : {settings.temperature['default']} K")
+    print(f"  Temperature    : {settings.temperature['method']} K")

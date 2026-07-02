@@ -53,15 +53,28 @@ clad.add_element('Al', 1.00, 'wo')
 
 # =============================================================================
 # COOLANT / MODERATOR
-# Light water (H2O) at ~38°C, atmospheric pressure
-# Density: 0.993 g/cm3
+# Two water temperatures per MCNP deck cross-section assignments:
+#   - Bulk pool water:     294 K (~21 °C)
+#   - Flux trap water:     316.8 K (~43.8 °C)
+# Density 0.993 g/cm³ is used for both; the deck was not available to verify
+# whether a different density is specified for the flux trap temperature.
+# OPEN ITEM: confirm flux-trap water density from Kyle's MCNP deck (at 316.8 K
+# the physical density is ~0.990 g/cm³; update if deck uses a distinct value).
 # =============================================================================
 
-water = openmc.Material(name='light_water')
-water.set_density('g/cm3', 0.993) # density at 38°C
-water.add_element('H', 2.0, 'ao')
-water.add_element('O', 1.0, 'ao')
-water.add_s_alpha_beta('c_H_in_H2O')  # thermal scattering for H in water
+water = openmc.Material(name='light_water_294K')
+water.temperature = 294.0
+water.add_nuclide('H1', 6.66909e-02)
+water.add_element('O', 6.66909e-02 / 2.0)
+water.set_density('sum')
+water.add_s_alpha_beta('c_H_in_H2O')
+
+water_flux_trap = openmc.Material(name='light_water_flux_trap_316K')
+water_flux_trap.temperature = 316.8
+water_flux_trap.add_nuclide('H1', 6.625423e-02)
+water_flux_trap.add_element('O', 6.625423e-02 / 2.0)
+water_flux_trap.set_density('sum')
+water_flux_trap.add_s_alpha_beta('c_H_in_H2O')
 
 # =============================================================================
 # CONTROL BLADE MATERIAL
@@ -163,6 +176,7 @@ materials = openmc.Materials([
     fuel,
     clad,
     water,
+    water_flux_trap,
     b4c,
     graphite,
     aluminum,
@@ -171,9 +185,9 @@ materials = openmc.Materials([
 ])
 
 if __name__ == '__main__':
-    # Export to XML for verification
     materials.export_to_xml()
     print("materials.xml written successfully.")
     print("\nMaterial summary:")
     for mat in materials:
-        print(f"  [{mat.id}] {mat.name}  —  {mat.density} g/cm3")
+        t = f"  T={mat.temperature} K" if mat.temperature is not None else ""
+        print(f"  [{mat.id}] {mat.name}  —  {mat.density} g/cm3{t}")

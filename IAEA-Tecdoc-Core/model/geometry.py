@@ -47,7 +47,7 @@ All dimensions in cm.
 """
 
 import openmc
-from materials import fuel, clad, water, b4c, graphite, aluminum, air, end_box_homog
+from materials import fuel, clad, water, water_flux_trap, b4c, graphite, aluminum, air, end_box_homog
 
 # =============================================================================
 # LATTICE / ELEMENT ENVELOPE
@@ -80,6 +80,13 @@ N_PLATES_STD  = 23
 N_PLATES_CTRL = 17
 
 WATER_CHAN_THICK = 0.219     # cm  (2.19 mm)
+
+# Flux trap cylindrical water hole radius.
+# ASSUMED 2.5 cm (inscribed radius of the 50 mm square hole).
+# Area-equivalent radius would be 5/sqrt(pi) ~2.8209 cm.
+# VERIFY against Kyle's MCNP deck — if the deck uses a CYL surface
+# with a different radius, update FT_HOLE_RADIUS here.
+FT_HOLE_RADIUS = 2.5         # cm
 
 HALF_Z = ELEM_Z / 2.0       # 30.0 cm
 
@@ -614,11 +621,15 @@ def make_control_fuel_element(elem_id, withdrawn_fraction=0.0):
 
 def make_flux_trap():
     """
-    Flux trap: aluminum block with a central 5×5 cm water hole.
-    Structural cells bounded to active zone z=[-30, +30];
-    end-box/water fill the full pitch footprint above/below.
-    """
+    Flux trap: aluminum block with a central cylindrical water hole (water_flux_trap
+    at 316.8 K), matching the MCNP deck which models the hole as a ZCylinder rather
+    than the originally-commented square.
 
+    Cylinder: radius FT_HOLE_RADIUS = 2.5 cm, centered at element origin (x=0, y=0).
+    The cylinder is axially unbounded within the active zone (active_z clips it).
+    Aluminum fills the annular region between the cylinder and the element envelope.
+    Inter-element gaps and all axial regions use bulk water (294 K).
+    """
     pitch_left  = openmc.XPlane(x0=-PITCH_X / 2.0)
     pitch_right = openmc.XPlane(x0= PITCH_X / 2.0)
     pitch_front = openmc.YPlane(y0=-PITCH_Y / 2.0)
@@ -629,29 +640,26 @@ def make_flux_trap():
     elem_front = openmc.YPlane(y0=-ELEM_Y / 2.0)
     elem_back  = openmc.YPlane(y0= ELEM_Y / 2.0)
 
-    hole_half  = 2.5
-    hole_left  = openmc.XPlane(x0=-hole_half)
-    hole_right = openmc.XPlane(x0= hole_half)
-    hole_front = openmc.YPlane(y0=-hole_half)
-    hole_back  = openmc.YPlane(y0= hole_half)
+    hole_cyl = openmc.ZCylinder(x0=0.0, y0=0.0, r=FT_HOLE_RADIUS)
 
-    hole_region  = +hole_left & -hole_right & +hole_front & -hole_back
-    block_region = +elem_left & -elem_right & +elem_front & -elem_back & ~hole_region
-    active_z     = +_z_fuel_bot & -_z_fuel_top
+    active_z = +_z_fuel_bot & -_z_fuel_top
 
     cells = []
 
+    # Cylindrical water hole — hot flux trap water at 316.8 K
     cells.append(openmc.Cell(
         name='flux_trap_water_hole',
-        fill=water,
-        region=hole_region & active_z
+        fill=water_flux_trap,
+        region=-hole_cyl & active_z
     ))
+    # Aluminum block: element envelope minus the cylinder, active zone only
     cells.append(openmc.Cell(
         name='flux_trap_aluminum_block',
         fill=aluminum,
-        region=block_region & active_z
+        region=(+elem_left & -elem_right & +elem_front & -elem_back & +hole_cyl & active_z)
     ))
 
+    # Inter-element water gaps (bulk water, active zone only)
     cells.append(openmc.Cell(
         name='flux_trap_gap_xleft',
         fill=water,
@@ -673,7 +681,7 @@ def make_flux_trap():
         region=(+elem_left & -elem_right & +elem_back & -pitch_back & active_z)
     ))
 
-    # Axial regions above/below active fuel — full pitch footprint
+    # Axial regions above/below active fuel — full pitch footprint, bulk water
     full_pitch = +pitch_left & -pitch_right & +pitch_front & -pitch_back
 
     cells.append(openmc.Cell(
@@ -702,14 +710,47 @@ def make_flux_trap():
 
 # =============================================================================
 # WATER AND GRAPHITE FILL UNIVERSES
-# (unbounded in z — fills whatever z-extent the parent lattice cell provides)
 # =============================================================================
 
-water_cell    = openmc.Cell(name='water_fill',    fill=water)
-water_univ    = openmc.Universe(name='water_universe', cells=[water_cell])
+# Water universe: fully unbounded — bulk water fills whatever space the parent
+# lattice boundary provides (used for the outer ring and top/bottom water rows).
+water_cell = openmc.Cell(name='water_fill', fill=water)
+water_univ = openmc.Universe(name='water_universe', cells=[water_cell])
 
-graphite_cell = openmc.Cell(name='graphite_fill', fill=graphite)
-graphite_univ = openmc.Universe(name='graphite_universe', cells=[graphite_cell])
+# Graphite reflector universe: bounded axially to match the fuel element pattern.
+# Graphite occupies only the active fuel z-range [-30, +30]; above and below it
+# mirrors the fuel element end-box + water stack so the reflector height matches
+# the core height without contributing graphite outside the active zone.
+graphite_univ = openmc.Universe(
+    name='graphite_universe',
+    cells=[
+        openmc.Cell(
+            name='graphite_active',
+            fill=graphite,
+            region=+_z_fuel_bot & -_z_fuel_top,              # −30 → +30 cm
+        ),
+        openmc.Cell(
+            name='graphite_upper_endbox',
+            fill=end_box_homog,
+            region=+_z_fuel_top & -_z_endbox_above,           # +30 → +45 cm
+        ),
+        openmc.Cell(
+            name='graphite_upper_water',
+            fill=water,
+            region=+_z_endbox_above & -_z_model_top,          # +45 → +95 cm
+        ),
+        openmc.Cell(
+            name='graphite_lower_endbox',
+            fill=end_box_homog,
+            region=+_z_endbox_below & -_z_fuel_bot,           # −45 → −30 cm
+        ),
+        openmc.Cell(
+            name='graphite_lower_water',
+            fill=water,
+            region=+_z_model_bot & -_z_endbox_below,          # −65 → −45 cm
+        ),
+    ],
+)
 
 
 # =============================================================================
@@ -717,7 +758,7 @@ graphite_univ = openmc.Universe(name='graphite_universe', cells=[graphite_cell])
 # =============================================================================
 
 std_elems  = [make_standard_fuel_element(i) for i in range(23)]
-ctrl_elems = [make_control_fuel_element(100 + i, withdrawn_fraction=1.0)
+ctrl_elems = [make_control_fuel_element(100 + i, withdrawn_fraction=0.0)
               for i in range(5)]
 
 W = water_univ
