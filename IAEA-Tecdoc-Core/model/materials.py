@@ -69,9 +69,9 @@ water.add_s_alpha_beta('c_H_in_H2O')  # thermal scattering for H in water
 # Density: 13.31 g/cm3
 # =============================================================================
 
-hafnium = openmc.Material(name='hafnium_control_blade')
-hafnium.set_density('g/cm3', 13.31)
-hafnium.add_element('Hf', 1.0, 'ao')
+# hafnium = openmc.Material(name='hafnium_control_blade')
+# hafnium.set_density('g/cm3', 13.31)
+# hafnium.add_element('Hf', 1.0, 'ao')
 
 # --- Alternative: Ag-In-Cd absorber (80-15-5 w/o) ---
 # ag_in_cd = openmc.Material(name='AgInCd_control_blade')
@@ -85,6 +85,18 @@ hafnium.add_element('Hf', 1.0, 'ao')
 # b4c.set_density('g/cm3', 2.52)
 # b4c.add_element('B', 4.0, 'ao')
 # b4c.add_element('C', 1.0, 'ao')
+
+b4c = openmc.Material(name='B4C control absorber')
+b4c.add_nuclide('B10', 1.914973e-02)
+b4c.add_nuclide('B11', 7.010412e-02)
+b4c.add_nuclide('C12', 2.005592e-02 * 0.9893)
+b4c.add_nuclide('C13', 2.005592e-02 * 0.0107)
+b4c.set_density('sum')
+# b4c.add_nuclide('B10', 1.914973e-02)   # atom/b-cm
+# b4c.add_nuclide('B11', 7.010412e-02)
+# b4c.add_nuclide('C0',  2.005592e-02)
+# b4c.set_density('sum')                 # = 1.093098e-01 atom/b-cm
+
 
 # =============================================================================
 # REFLECTOR MATERIAL
@@ -118,6 +130,32 @@ air.add_element('N', 0.784, 'ao')
 air.add_element('O', 0.216, 'ao')
 
 # =============================================================================
+# END-BOX HOMOGENIZED MATERIAL
+# 25 v/o Al (2.70 g/cm³) / 75 v/o H₂O (0.993 g/cm³) per TECDOC-643 ANL appendix.
+# Used in the 15 cm end-box regions immediately above and below the active fuel.
+# Density = 0.25*2.70 + 0.75*0.993 = 1.41975 g/cm³
+# =============================================================================
+
+_vf_al  = 0.25
+_vf_h2o = 0.75
+_rho_al  = 2.70    # g/cm³
+_rho_h2o = 0.993   # g/cm³ (at 38°C)
+
+# Atom densities proportional to (v_fraction * rho) / M_mol
+_n_al  = _vf_al  * _rho_al  / 26.982           # Al
+_n_h   = _vf_h2o * _rho_h2o / 18.015 * 2.0    # H  (2 atoms per H₂O)
+_n_o   = _vf_h2o * _rho_h2o / 18.015 * 1.0    # O
+_n_tot = _n_al + _n_h + _n_o
+
+end_box_homog = openmc.Material(name='end_box_homogenized')
+end_box_homog.set_density('g/cm3', _vf_al * _rho_al + _vf_h2o * _rho_h2o)  # 1.41975
+end_box_homog.add_element('Al', _n_al / _n_tot, 'ao')
+end_box_homog.add_element('H',  _n_h  / _n_tot, 'ao')
+end_box_homog.add_element('O',  _n_o  / _n_tot, 'ao')
+end_box_homog.add_s_alpha_beta('c_H_in_H2O')
+end_box_homog.add_s_alpha_beta('c_Al27')
+
+# =============================================================================
 # Collect all materials into a Materials object for export
 # =============================================================================
 
@@ -125,10 +163,11 @@ materials = openmc.Materials([
     fuel,
     clad,
     water,
-    hafnium,
+    b4c,
     graphite,
     aluminum,
     air,
+    end_box_homog,
 ])
 
 if __name__ == '__main__':

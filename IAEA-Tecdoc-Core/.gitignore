@@ -19,3 +19,5 @@ summary.h5
 tracks.h5
 volume_*.h5
 *.out
+run_results/
+*.h5

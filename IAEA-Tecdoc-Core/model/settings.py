@@ -56,7 +56,7 @@ settings.run_mode = 'eigenvalue'   # criticality calculation
 #   particles=10000, batches=200, inactive=50
 # =============================================================================
 
-settings.particles  = 10000    # neutrons per batch (increase for production)
+settings.particles  = 50000    # neutrons per batch (increase for production)
 settings.batches    = 150      # total batches
 settings.inactive   = 50      # discard first 50 batches (source convergence)
 
