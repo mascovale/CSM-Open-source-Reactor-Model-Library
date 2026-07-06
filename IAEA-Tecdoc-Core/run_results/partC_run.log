@@ -1,0 +1,188 @@
+/home/tmccoy/miniconda3/envs/openmc-env/lib/python3.10/site-packages/openmc/stats/multivariate.py:829: FutureWarning: The 'only_fissionable' has been deprecated. Use the 'constraints' argument when defining a source instead.
+  warn("The 'only_fissionable' has been deprecated. Use the "
+
+============================================================
+  Running: all_out  (blades_inserted=False)
+============================================================
+                                %%%%%%%%%%%%%%%
+                           %%%%%%%%%%%%%%%%%%%%%%%%
+                        %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+                      %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+                    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+                   %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+                                    %%%%%%%%%%%%%%%%%%%%%%%%
+                                     %%%%%%%%%%%%%%%%%%%%%%%%
+                 ###############      %%%%%%%%%%%%%%%%%%%%%%%%
+                ##################     %%%%%%%%%%%%%%%%%%%%%%%
+                ###################     %%%%%%%%%%%%%%%%%%%%%%%
+                ####################     %%%%%%%%%%%%%%%%%%%%%%
+                #####################     %%%%%%%%%%%%%%%%%%%%%
+                ######################     %%%%%%%%%%%%%%%%%%%%
+                #######################     %%%%%%%%%%%%%%%%%%
+                 #######################     %%%%%%%%%%%%%%%%%
+                 ######################     %%%%%%%%%%%%%%%%%
+                  ####################     %%%%%%%%%%%%%%%%%
+                    #################     %%%%%%%%%%%%%%%%%
+                     ###############     %%%%%%%%%%%%%%%%
+                       ############     %%%%%%%%%%%%%%%
+                          ########     %%%%%%%%%%%%%%
+                                      %%%%%%%%%%%
+
+                 | The OpenMC Monte Carlo Code
+       Copyright | 2011-2024 MIT, UChicago Argonne LLC, and contributors
+         License | https://docs.openmc.org/en/latest/license.html
+         Version | 0.15.0
+        Git SHA1 | 84fb85977f46e162fea8f5a20ea653a3ec62ac24
+       Date/Time | 2026-06-30 15:46:46
+  OpenMP Threads | 12
+
+ Reading model XML file 'model.xml' ...
+ Reading cross sections XML file...
+ Reading U235 from /home/tmccoy/nuclear-data/endfb-viii.0-hdf5/neutron/U235.h5
+ Reading U238 from /home/tmccoy/nuclear-data/endfb-viii.0-hdf5/neutron/U238.h5
+ Reading Si28 from /home/tmccoy/nuclear-data/endfb-viii.0-hdf5/neutron/Si28.h5
+ Reading Si29 from /home/tmccoy/nuclear-data/endfb-viii.0-hdf5/neutron/Si29.h5
+ Reading Si30 from /home/tmccoy/nuclear-data/endfb-viii.0-hdf5/neutron/Si30.h5
+ Reading Al27 from /home/tmccoy/nuclear-data/endfb-viii.0-hdf5/neutron/Al27.h5
+ Reading H1 from /home/tmccoy/nuclear-data/endfb-viii.0-hdf5/neutron/H1.h5
+ Reading H2 from /home/tmccoy/nuclear-data/endfb-viii.0-hdf5/neutron/H2.h5
+ Reading O16 from /home/tmccoy/nuclear-data/endfb-viii.0-hdf5/neutron/O16.h5
+ Reading O17 from /home/tmccoy/nuclear-data/endfb-viii.0-hdf5/neutron/O17.h5
+ Reading O18 from /home/tmccoy/nuclear-data/endfb-viii.0-hdf5/neutron/O18.h5
+ Reading Hf174 from /home/tmccoy/nuclear-data/endfb-viii.0-hdf5/neutron/Hf174.h5
+ Reading Hf176 from /home/tmccoy/nuclear-data/endfb-viii.0-hdf5/neutron/Hf176.h5
+ Reading Hf177 from /home/tmccoy/nuclear-data/endfb-viii.0-hdf5/neutron/Hf177.h5
+ Reading Hf178 from /home/tmccoy/nuclear-data/endfb-viii.0-hdf5/neutron/Hf178.h5
+ Reading Hf179 from /home/tmccoy/nuclear-data/endfb-viii.0-hdf5/neutron/Hf179.h5
+ Reading Hf180 from /home/tmccoy/nuclear-data/endfb-viii.0-hdf5/neutron/Hf180.h5
+ Reading C12 from /home/tmccoy/nuclear-data/endfb-viii.0-hdf5/neutron/C12.h5
+ Reading C13 from /home/tmccoy/nuclear-data/endfb-viii.0-hdf5/neutron/C13.h5
+ Reading N14 from /home/tmccoy/nuclear-data/endfb-viii.0-hdf5/neutron/N14.h5
+ Reading N15 from /home/tmccoy/nuclear-data/endfb-viii.0-hdf5/neutron/N15.h5
+ Reading c_Al27 from
+ /home/tmccoy/nuclear-data/endfb-viii.0-hdf5/thermal/c_Al27.h5
+ Reading c_H_in_H2O from
+ /home/tmccoy/nuclear-data/endfb-viii.0-hdf5/thermal/c_H_in_H2O.h5
+ Reading c_Graphite from
+ /home/tmccoy/nuclear-data/endfb-viii.0-hdf5/thermal/c_Graphite.h5
+ Minimum neutron data temperature: 250 K
+ Maximum neutron data temperature: 2500 K
+ Preparing distributed cell instances...
+ Writing summary.h5 file...
+ Maximum neutron transport energy: 20000000 eV for H1
+ Initializing source particles...
+
+ ====================>     K EIGENVALUE SIMULATION     <====================
+
+  Bat./Gen.      k            Average k
+  =========   ========   ====================
+        1/1    1.14032
+        2/1    1.17481
+        3/1    1.18906
+        4/1    1.19142
+        5/1    1.18391
+        6/1    1.18111
+        7/1    1.19336
+        8/1    1.19659
+        9/1    1.19633
+       10/1    1.18530
+       11/1    1.18783
+       12/1    1.18815
+       13/1    1.18670
+       14/1    1.19885
+       15/1    1.19100
+       16/1    1.17843
+       17/1    1.20380
+       18/1    1.19692
+       19/1    1.19403
+       20/1    1.19289
+       21/1    1.19233
+       22/1    1.17650
+       23/1    1.20259
+       24/1    1.19202
+       25/1    1.19582
+       26/1    1.20154
+       27/1    1.20185
+       28/1    1.20372
+       29/1    1.19257
+       30/1    1.20261
+       31/1    1.20403
+       32/1    1.18771
+       33/1    1.20110
+       34/1    1.19411
+       35/1    1.20155
+       36/1    1.20005
+       37/1    1.18146
+       38/1    1.19063
+       39/1    1.20456
+       40/1    1.20420
+       41/1    1.19366
+       42/1    1.19779
+       43/1    1.19434
+       44/1    1.20460
+       45/1    1.19353
+       46/1    1.19167
+       47/1    1.19554
+       48/1    1.19920
+       49/1    1.20038
+       50/1    1.18793
+       51/1    1.19462
+       52/1    1.19810    1.19636 +/- 0.00174
+       53/1    1.19713    1.19662 +/- 0.00104
+       54/1    1.20117    1.19776 +/- 0.00135
+       55/1    1.20476    1.19916 +/- 0.00175
+       56/1    1.19351    1.19822 +/- 0.00171
+       57/1    1.19859    1.19827 +/- 0.00145
+       58/1    1.20037    1.19853 +/- 0.00128
+       59/1    1.18548    1.19708 +/- 0.00184
+       60/1    1.20584    1.19796 +/- 0.00186
+       61/1    1.19712    1.19788 +/- 0.00169
+       62/1    1.18801    1.19706 +/- 0.00175
+       63/1    1.20484    1.19766 +/- 0.00171
+       64/1    1.19192    1.19725 +/- 0.00164
+       65/1    1.19632    1.19719 +/- 0.00153
+       66/1    1.19450    1.19702 +/- 0.00144
+       67/1    1.19149    1.19669 +/- 0.00139
+       68/1    1.19901    1.19682 +/- 0.00132
+       69/1    1.19991    1.19698 +/- 0.00126
+       70/1    1.19879    1.19708 +/- 0.00119
+       71/1    1.19130    1.19680 +/- 0.00117
+       72/1    1.18837    1.19642 +/- 0.00118
+       73/1    1.19371    1.19630 +/- 0.00113
+       74/1    1.19330    1.19617 +/- 0.00109
+       75/1    1.18974    1.19592 +/- 0.00108
+       76/1    1.19828    1.19601 +/- 0.00104
+       77/1    1.19096    1.19582 +/- 0.00102
+       78/1    1.20728    1.19623 +/- 0.00106
+       79/1    1.20152    1.19641 +/- 0.00104
+       80/1    1.19876    1.19649 +/- 0.00101
+       81/1    1.20506    1.19677 +/- 0.00101
+       82/1    1.19982    1.19686 +/- 0.00099
+       83/1    1.19200    1.19672 +/- 0.00097
+       84/1    1.19819    1.19676 +/- 0.00094
+       85/1    1.20102    1.19688 +/- 0.00092
+       86/1    1.19600    1.19686 +/- 0.00090
+       87/1    1.20509    1.19708 +/- 0.00090
+       88/1    1.20528    1.19729 +/- 0.00090
+       89/1    1.20740    1.19755 +/- 0.00091
+       90/1    1.20097    1.19764 +/- 0.00090
+       91/1    1.19234    1.19751 +/- 0.00088
+       92/1    1.19015    1.19733 +/- 0.00088
+       93/1    1.19147    1.19720 +/- 0.00087
+       94/1    1.19408    1.19713 +/- 0.00085
+       95/1    1.19347    1.19705 +/- 0.00084
+       96/1    1.20968    1.19732 +/- 0.00086
+       97/1    1.19443    1.19726 +/- 0.00085
+       98/1    1.18790    1.19706 +/- 0.00085
+       99/1    1.20244    1.19717 +/- 0.00084
+      100/1    1.19867    1.19720 +/- 0.00083
+      101/1    1.20009    1.19726 +/- 0.00081
+      102/1    1.18996    1.19712 +/- 0.00081
+      103/1    1.18647    1.19692 +/- 0.00082
+      104/1    1.19571    1.19690 +/- 0.00080
+      105/1    1.18614    1.19670 +/- 0.00081
+      106/1    1.19986    1.19676 +/- 0.00080
+      107/1    1.20963    1.19698 +/- 0.00082
+      108/1    1.18757    1.19682 +/- 0.00082
+      109/1    1.19228    1.19674 +/- 0.00081
+      110/1    1.19161    1.19666 +/- 0.00080
