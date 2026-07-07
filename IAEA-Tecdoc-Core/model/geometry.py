@@ -15,23 +15,27 @@ Core Layout:
     - Lattice pitch: 77 mm x 81 mm
     - Active fuel height: 60 cm
 
-Axial model structure (TECDOC ANL appendix faithful):
-    CORE_BOTTOM = -65 cm  (vacuum)
-    [-65, -45]  : 20 cm light water
+Axial model structure (deck-confirmed, symmetric about z=0):
+    CORE_BOTTOM = -90 cm  (vacuum)
+    [-90, -45]  : 45 cm light water
     [-45, -30]  : 15 cm homogenized end-box (0.25 Al / 0.75 H₂O by volume)
     [-30, +30]  : 60 cm active fuel region
     [+30, +45]  : 15 cm homogenized end-box
-    [+45, +95]  : 50 cm light water (blade fully-out reaches z=+90)
-    CORE_TOP    = +95 cm  (vacuum)
+    [+45, +90]  : 45 cm light water
+    CORE_TOP    = +90 cm  (vacuum) — COINCIDES with the fully-withdrawn (f=1)
+                  blade top; no water cap above the withdrawn blade.
 
 Control blade model — fixed-length sliding absorber:
     BLADE_LENGTH = 60 cm (rigid; never changes)
     ROD_TRAVEL   = 60 cm (full stroke)
     withdrawn_fraction f in [0, 1]:
         z_bot = -30 + f * 60   → f=0: -30,  f=1: +30
-        z_top = z_bot + 60     → f=0: +30,  f=1: +90
-    b4c fills the Hf-slot x/y band for z in [z_bot, z_top].
-    Water fills the slot outside that range (below z_bot and above z_top).
+        z_top = z_bot + 60     → f=0: +30,  f=1: +90 (= CORE_TOP at f=1)
+    b4c fills the Hf-slot x/y band for z in [z_bot, z_top]; the region above
+    z_top in that band is region-appropriate material (end_box_homog in
+    [+30,+45], water in [+45, CORE_TOP]) rather than a permanently reserved
+    water channel. At f=1 that above-blade complement is zero-measure
+    (z_top == CORE_TOP): no cap.
     All other cells (guide plates, fuel, channels, etc.) are restricted
     to the active zone z=[-30, +30]; end-box/water cells cover z outside.
 
@@ -59,6 +63,16 @@ PITCH_Y = 8.1    # cm  (81 mm)
 ELEM_X = 7.6     # cm  (76 mm)
 ELEM_Y = 8.0     # cm  (80 mm)
 ELEM_Z = 60.0    # cm  (600 mm) — active fuel height
+
+# Inter-element water gap — documentation/tripwire only. Feeds no surface or
+# cell directly; every gap cell derives its width from the pitch/envelope
+# XPlane/YPlane objects themselves (PITCH_X/Y, ELEM_X/Y above), not from
+# these constants. Exists so a future PITCH/ELEM edit that zeroes or inverts
+# the gap fails loudly here instead of emitting a zero-width sliver cell.
+GAP_X = (PITCH_X - ELEM_X) / 2.0   # cm
+GAP_Y = (PITCH_Y - ELEM_Y) / 2.0   # cm
+assert GAP_X > 0, "PITCH_X must exceed ELEM_X (zero/negative gap)"
+assert GAP_Y > 0, "PITCH_Y must exceed ELEM_Y (zero/negative gap)"
 
 SIDE_PLATE_THICK = 0.48   # cm  (4.8 mm)
 ACTIVE_STACK_X   = ELEM_X - 2 * SIDE_PLATE_THICK   # 6.64 cm
@@ -96,10 +110,21 @@ HALF_Z = ELEM_Z / 2.0       # 30.0 cm
 
 BLADE_LENGTH     = 60.0    # cm — rigid absorber blade (fixed length, translates in z)
 ROD_TRAVEL       = 60.0    # cm — full stroke
-CORE_TOP         = +95.0   # cm — vacuum boundary (5 cm above fully-withdrawn blade top)
-CORE_BOTTOM      = -65.0   # cm — vacuum boundary (15 cm end-box + 20 cm water below -30)
+CORE_TOP         = +90.0   # cm — vacuum boundary; COINCIDES with the fully-withdrawn
+                            # (f=1) blade top (z_top = -30 + 60 + 60 = +90). No cap above.
+CORE_BOTTOM      = -90.0   # cm — vacuum boundary; symmetric with CORE_TOP
+                            # (15 cm end-box + 45 cm water below -30)
 ENDBOX_ABOVE_TOP = +45.0   # cm — top of upper end-box  (+30 + 15 cm)
 ENDBOX_BELOW_BOT = -45.0   # cm — bottom of lower end-box (-30 - 15 cm)
+
+# Symmetry / height tripwires — deck-confirmed axial stack. Documentation +
+# guard only: none of these feed a cell or surface directly.
+assert CORE_TOP == -CORE_BOTTOM, "axial model must be symmetric about z=0"
+assert (CORE_TOP - CORE_BOTTOM) == 180.0, "total axial height must be 180 cm"
+assert (CORE_TOP - ENDBOX_ABOVE_TOP) == 45.0, "upper water region must be 45 cm"
+assert (ENDBOX_BELOW_BOT - CORE_BOTTOM) == 45.0, "lower water region must be 45 cm"
+assert (ENDBOX_ABOVE_TOP - HALF_Z) == 15.0, "upper end-box must be 15 cm"
+assert (-HALF_Z - ENDBOX_BELOW_BOT) == 15.0, "lower end-box must be 15 cm"
 
 # Shared axial ZPlane surfaces — transmission (NOT vacuum boundaries).
 # Defined once at module level and reused in every element universe to avoid
@@ -108,8 +133,33 @@ _z_fuel_bot     = openmc.ZPlane(z0=-HALF_Z)           # −30.0 cm
 _z_fuel_top     = openmc.ZPlane(z0= HALF_Z)           # +30.0 cm
 _z_endbox_above = openmc.ZPlane(z0=ENDBOX_ABOVE_TOP)  # +45.0 cm
 _z_endbox_below = openmc.ZPlane(z0=ENDBOX_BELOW_BOT)  # −45.0 cm
-_z_model_top    = openmc.ZPlane(z0=CORE_TOP)           # +95.0 cm
-_z_model_bot    = openmc.ZPlane(z0=CORE_BOTTOM)        # −65.0 cm
+_z_model_top    = openmc.ZPlane(z0=CORE_TOP)           # +90.0 cm
+_z_model_bot    = openmc.ZPlane(z0=CORE_BOTTOM)        # −90.0 cm
+
+
+# =============================================================================
+# END-BOX INTER-ELEMENT GAP HELPER
+# Segments the homogenized end-box in x-y using the SAME pitch/envelope
+# planes (and therefore the same gap width) as the active-zone gap cells, so
+# the end-box plane mirrors the active-core element/gap grid. Takes only
+# already-built plane objects from the calling function — builds none.
+# =============================================================================
+
+def _endbox_gap_cells(name_prefix, fill_mat, pitch_planes, envelope_planes, z_lo, z_hi):
+    """4 water sliver cells (xleft/xright/yfront/yback) between envelope and
+    pitch, restricted to [z_lo, z_hi]."""
+    pitch_left, pitch_right, pitch_front, pitch_back = pitch_planes
+    env_left, env_right, env_front, env_back = envelope_planes
+    return [
+        openmc.Cell(name=f'{name_prefix}_gap_xleft', fill=fill_mat,
+            region=(+pitch_left & -env_left & +pitch_front & -pitch_back & +z_lo & -z_hi)),
+        openmc.Cell(name=f'{name_prefix}_gap_xright', fill=fill_mat,
+            region=(+env_right & -pitch_right & +pitch_front & -pitch_back & +z_lo & -z_hi)),
+        openmc.Cell(name=f'{name_prefix}_gap_yfront', fill=fill_mat,
+            region=(+env_left & -env_right & +pitch_front & -env_front & +z_lo & -z_hi)),
+        openmc.Cell(name=f'{name_prefix}_gap_yback', fill=fill_mat,
+            region=(+env_left & -env_right & +env_back & -pitch_back & +z_lo & -z_hi)),
+    ]
 
 
 # =============================================================================
@@ -307,13 +357,18 @@ def make_standard_fuel_element(elem_id):
     ))
 
     # ── Axial regions above/below the active fuel ──────────────────────────
-    # Fill the full pitch footprint; structural detail homogenized per TECDOC.
+    # End-box footprint mirrors the active-core element/gap grid: envelope
+    # block (same box_left/right/front/back as the active zone) + thin pitch
+    # gaps (same pitch_left/right/front/back), via _endbox_gap_cells, just
+    # restricted to the end-box z-band instead of active_z. Water-beyond
+    # regions stay full pitch (uniform water, no grid needed).
     full_pitch = +pitch_left & -pitch_right & +pitch_front & -pitch_back
+    envelope   = +box_left & -box_right & +box_front & -box_back
 
     cells.append(openmc.Cell(
         name=f'std{elem_id}_upper_endbox',
         fill=end_box_homog,
-        region=full_pitch & +_z_fuel_top & -_z_endbox_above
+        region=envelope & +_z_fuel_top & -_z_endbox_above
     ))
     cells.append(openmc.Cell(
         name=f'std{elem_id}_upper_water',
@@ -323,13 +378,20 @@ def make_standard_fuel_element(elem_id):
     cells.append(openmc.Cell(
         name=f'std{elem_id}_lower_endbox',
         fill=end_box_homog,
-        region=full_pitch & +_z_endbox_below & -_z_fuel_bot
+        region=envelope & +_z_endbox_below & -_z_fuel_bot
     ))
     cells.append(openmc.Cell(
         name=f'std{elem_id}_lower_water',
         fill=water,
         region=full_pitch & +_z_model_bot & -_z_endbox_below
     ))
+
+    pitch_planes = (pitch_left, pitch_right, pitch_front, pitch_back)
+    box_planes   = (box_left, box_right, box_front, box_back)
+    cells.extend(_endbox_gap_cells(f'std{elem_id}_endbox_upper', water,
+        pitch_planes, box_planes, _z_fuel_top, _z_endbox_above))
+    cells.extend(_endbox_gap_cells(f'std{elem_id}_endbox_lower', water,
+        pitch_planes, box_planes, _z_endbox_below, _z_fuel_bot))
 
     return openmc.Universe(name=f'std_fuel_elem_{elem_id}', cells=cells)
 
@@ -358,8 +420,13 @@ def make_standard_fuel_element(elem_id):
 # Fixed-length sliding blade:
 #   The B4C absorber blade is BLADE_LENGTH=60 cm long and translates in z.
 #   At fraction f, the blade occupies z=[z_bot, z_top] = [-30+f*60, +30+f*60].
-#   b4c fills the Hf-slot x/y band for z in [z_bot, z_top] across the
-#   full model height. Water fills the slot below z_bot and above z_top.
+#   b4c fills the Hf-slot x/y band for z in [z_bot, z_top] across the full
+#   model height. Below z_bot, water fills the slot (active zone only — the
+#   blade never dips below z=-30, so the lower end-box/water are uniform
+#   material with no reserved slot at all). Above z_top, the slot's own
+#   material is region-appropriate (homo in [+30,+45], water in
+#   [+45, CORE_TOP]) rather than a permanently reserved water channel; at
+#   f=1, z_top == CORE_TOP so that complement is zero-measure (no cap).
 #   All guide/slider/fuel/channel cells are bounded to the active zone
 #   z=[-30, +30]; end-box/water cells fill z outside that range.
 # =============================================================================
@@ -419,6 +486,17 @@ def make_control_fuel_element(elem_id, withdrawn_fraction=0.0):
         f"ctrl{elem_id}: blade bottom {z_bot:.2f} < CORE_BOTTOM {CORE_BOTTOM}")
     assert z_top <= CORE_TOP, (
         f"ctrl{elem_id}: blade top {z_top:.2f} > CORE_TOP {CORE_TOP}")
+    # These two are the sole justification for (a) merging the lower end-box/
+    # water into uniform material with no Hf-slot exclusion, and (b) never
+    # needing an "above-active" water-gap cell (the blade always reaches at
+    # least the top of the active zone). If travel or geometry parameters
+    # ever change so these fail, both simplifications below become wrong.
+    assert z_bot >= -HALF_Z, (
+        f"ctrl{elem_id}: blade_z_bot={z_bot:.2f} < -HALF_Z ({-HALF_Z}) — "
+        "blade would enter the lower end-box/water; lower-side merge is invalid")
+    assert z_top >= HALF_Z, (
+        f"ctrl{elem_id}: blade_z_top={z_top:.2f} < HALF_Z ({HALF_Z}) — "
+        "blade would leave a water gap above it inside the active zone")
     print(f"ctrl{elem_id}: f={f:.3f}  blade z=[{z_bot:.2f}, {z_top:.2f}] cm"
           f"  (within [{CORE_BOTTOM}, {CORE_TOP}] ✓)")
 
@@ -543,11 +621,9 @@ def make_control_fuel_element(elem_id, withdrawn_fraction=0.0):
         region=(+top_guide_top & -elem_back &
                 +side_inner_left & -side_inner_right & active_z)))
 
-    # ── Fixed-length B4C blade — spans full model height in 3 pieces ────────
-    # B4C:         [z_bot, z_top]   (blade body)
-    # Water below: [CORE_BOTTOM, z_bot]
-    # Water above: [z_top, CORE_TOP]
-
+    # ── Fixed-length B4C blade ───────────────────────────────────────────────
+    # B4C occupies [z_bot, z_top] in the Hf-slot band, unbounded by axial
+    # region (spans across active/end-box/water boundaries as one piece).
     cells.append(openmc.Cell(
         name=f'ctrl{elem_id}_absorber_bottom', fill=b4c,
         region=hf_slot_b & +blade_z_bot & -blade_z_top))
@@ -555,19 +631,37 @@ def make_control_fuel_element(elem_id, withdrawn_fraction=0.0):
         name=f'ctrl{elem_id}_absorber_top', fill=b4c,
         region=hf_slot_t & +blade_z_bot & -blade_z_top))
 
+    # Water gap below the blade, ACTIVE ZONE ONLY (blade withdrawing vacates
+    # the bottom of the active zone; blade_z_bot in [-30,+30] per the assert
+    # above). There is never a gap above the blade inside the active zone,
+    # since blade_z_top is always >= HALF_Z (asserted above).
     cells.append(openmc.Cell(
-        name=f'ctrl{elem_id}_slot_b_water_below', fill=water,
-        region=hf_slot_b & +_z_model_bot & -blade_z_bot))
+        name=f'ctrl{elem_id}_slot_b_water_active', fill=water,
+        region=hf_slot_b & +_z_fuel_bot & -blade_z_bot))
     cells.append(openmc.Cell(
-        name=f'ctrl{elem_id}_slot_t_water_below', fill=water,
-        region=hf_slot_t & +_z_model_bot & -blade_z_bot))
+        name=f'ctrl{elem_id}_slot_t_water_active', fill=water,
+        region=hf_slot_t & +_z_fuel_bot & -blade_z_bot))
 
+    # Upper end-box / upper-water complements to the blade, in the Hf-slot
+    # x/y band: region-appropriate material (homo in [+30,+45], water in
+    # [+45, CORE_TOP]) wherever the blade has not yet reached, instead of a
+    # permanently reserved water channel. At f=1, blade_z_top == CORE_TOP, so
+    # the water-region complement below is zero-measure — that IS the "no
+    # cap above the withdrawn blade" result, not a cell to delete.
+    # No lower-side counterpart is needed: blade_z_bot is always >= -HALF_Z
+    # (asserted above), so the blade never reaches the lower end-box/water.
     cells.append(openmc.Cell(
-        name=f'ctrl{elem_id}_slot_b_water_above', fill=water,
-        region=hf_slot_b & +blade_z_top & -_z_model_top))
+        name=f'ctrl{elem_id}_upper_endbox_slot_b', fill=end_box_homog,
+        region=hf_slot_b & +_z_fuel_top & -_z_endbox_above & +blade_z_top))
     cells.append(openmc.Cell(
-        name=f'ctrl{elem_id}_slot_t_water_above', fill=water,
-        region=hf_slot_t & +blade_z_top & -_z_model_top))
+        name=f'ctrl{elem_id}_upper_endbox_slot_t', fill=end_box_homog,
+        region=hf_slot_t & +_z_fuel_top & -_z_endbox_above & +blade_z_top))
+    cells.append(openmc.Cell(
+        name=f'ctrl{elem_id}_upper_water_slot_b', fill=water,
+        region=hf_slot_b & +_z_endbox_above & -_z_model_top & +blade_z_top))
+    cells.append(openmc.Cell(
+        name=f'ctrl{elem_id}_upper_water_slot_t', fill=water,
+        region=hf_slot_t & +_z_endbox_above & -_z_model_top & +blade_z_top))
 
     # ── 17-plate fuel follower (active zone only) ───────────────────────────
 
@@ -646,23 +740,35 @@ def make_control_fuel_element(elem_id, withdrawn_fraction=0.0):
                 +elem_back & -pitch_back & active_z)))
 
     # ── Axial regions above/below active fuel ───────────────────────────────
-    # The Hf slot has its own cells (above). Everything else in the pitch cell
-    # becomes homogenized end-box (15 cm) or water (beyond that).
+    # Upper end-box/water still exclude the Hf-slot footprint (handled above,
+    # since the blade can reach into them). Lower end-box/water need NO such
+    # exclusion: the blade never enters z<-HALF_Z (asserted above), so that
+    # band is uniform material straight through — no reserved gap. End-box
+    # footprint mirrors the active-core element/gap grid (envelope + thin
+    # pitch gaps via _endbox_gap_cells); water-beyond stays full pitch.
     full_pitch   = +pitch_left & -pitch_right & +pitch_front & -pitch_back
+    envelope     = +elem_left & -elem_right & +elem_front & -elem_back
     not_hf_slots = ~hf_slot_b & ~hf_slot_t   # complement of both Hf slot footprints
 
     cells.append(openmc.Cell(
         name=f'ctrl{elem_id}_upper_endbox', fill=end_box_homog,
-        region=full_pitch & +_z_fuel_top & -_z_endbox_above & not_hf_slots))
+        region=envelope & +_z_fuel_top & -_z_endbox_above & not_hf_slots))
     cells.append(openmc.Cell(
         name=f'ctrl{elem_id}_upper_water', fill=water,
         region=full_pitch & +_z_endbox_above & -_z_model_top & not_hf_slots))
     cells.append(openmc.Cell(
         name=f'ctrl{elem_id}_lower_endbox', fill=end_box_homog,
-        region=full_pitch & +_z_endbox_below & -_z_fuel_bot & not_hf_slots))
+        region=envelope & +_z_endbox_below & -_z_fuel_bot))
     cells.append(openmc.Cell(
         name=f'ctrl{elem_id}_lower_water', fill=water,
-        region=full_pitch & +_z_model_bot & -_z_endbox_below & not_hf_slots))
+        region=full_pitch & +_z_model_bot & -_z_endbox_below))
+
+    pitch_planes = (pitch_left, pitch_right, pitch_front, pitch_back)
+    elem_planes  = (elem_left, elem_right, elem_front, elem_back)
+    cells.extend(_endbox_gap_cells(f'ctrl{elem_id}_endbox_upper', water,
+        pitch_planes, elem_planes, _z_fuel_top, _z_endbox_above))
+    cells.extend(_endbox_gap_cells(f'ctrl{elem_id}_endbox_lower', water,
+        pitch_planes, elem_planes, _z_endbox_below, _z_fuel_bot))
 
     return openmc.Universe(name=f'ctrl_fuel_elem_{elem_id}', cells=cells)
 
@@ -733,13 +839,16 @@ def make_flux_trap():
         region=(+elem_left & -elem_right & +elem_back & -pitch_back & active_z)
     ))
 
-    # Axial regions above/below active fuel — full pitch footprint, bulk water
+    # Axial regions above/below active fuel. End-box mirrors the active-core
+    # element/gap grid (envelope + thin pitch gaps via _endbox_gap_cells);
+    # water-beyond regions stay full pitch (uniform water).
     full_pitch = +pitch_left & -pitch_right & +pitch_front & -pitch_back
+    envelope   = +elem_left & -elem_right & +elem_front & -elem_back
 
     cells.append(openmc.Cell(
         name='flux_trap_upper_endbox',
         fill=end_box_homog,
-        region=full_pitch & +_z_fuel_top & -_z_endbox_above
+        region=envelope & +_z_fuel_top & -_z_endbox_above
     ))
     cells.append(openmc.Cell(
         name='flux_trap_upper_water',
@@ -749,13 +858,20 @@ def make_flux_trap():
     cells.append(openmc.Cell(
         name='flux_trap_lower_endbox',
         fill=end_box_homog,
-        region=full_pitch & +_z_endbox_below & -_z_fuel_bot
+        region=envelope & +_z_endbox_below & -_z_fuel_bot
     ))
     cells.append(openmc.Cell(
         name='flux_trap_lower_water',
         fill=water,
         region=full_pitch & +_z_model_bot & -_z_endbox_below
     ))
+
+    pitch_planes = (pitch_left, pitch_right, pitch_front, pitch_back)
+    elem_planes  = (elem_left, elem_right, elem_front, elem_back)
+    cells.extend(_endbox_gap_cells('flux_trap_endbox_upper', water,
+        pitch_planes, elem_planes, _z_fuel_top, _z_endbox_above))
+    cells.extend(_endbox_gap_cells('flux_trap_endbox_lower', water,
+        pitch_planes, elem_planes, _z_endbox_below, _z_fuel_bot))
 
     return openmc.Universe(name='flux_trap_universe', cells=cells)
 
@@ -795,6 +911,7 @@ def make_graphite_element():
 
     active_z   = +_z_fuel_bot & -_z_fuel_top
     full_pitch = +pitch_left & -pitch_right & +pitch_front & -pitch_back
+    envelope   = +blk_left & -blk_right & +blk_front & -blk_back
 
     cells = [
         openmc.Cell(
@@ -829,28 +946,38 @@ def make_graphite_element():
             region=(+blk_left & -blk_right &
                     +blk_back & -pitch_back & active_z),
         ),
-        # Axial stack above/below the active zone (full pitch footprint)
+        # Axial stack above/below the active zone. End-box mirrors the
+        # active-core element/gap grid (envelope + thin pitch gaps, added
+        # below via _endbox_gap_cells); water-beyond stays full pitch.
         openmc.Cell(
             name='graphite_upper_endbox',
             fill=end_box_homog,
-            region=full_pitch & +_z_fuel_top & -_z_endbox_above,   # +30 → +45 cm
+            region=envelope & +_z_fuel_top & -_z_endbox_above,   # +30 → +45 cm
         ),
         openmc.Cell(
             name='graphite_upper_water',
             fill=water,
-            region=full_pitch & +_z_endbox_above & -_z_model_top,  # +45 → +95 cm
+            region=full_pitch & +_z_endbox_above & -_z_model_top,  # +45 → +90 cm
         ),
         openmc.Cell(
             name='graphite_lower_endbox',
             fill=end_box_homog,
-            region=full_pitch & +_z_endbox_below & -_z_fuel_bot,   # −45 → −30 cm
+            region=envelope & +_z_endbox_below & -_z_fuel_bot,   # −45 → −30 cm
         ),
         openmc.Cell(
             name='graphite_lower_water',
             fill=water,
-            region=full_pitch & +_z_model_bot & -_z_endbox_below,  # −65 → −45 cm
+            region=full_pitch & +_z_model_bot & -_z_endbox_below,  # −90 → −45 cm
         ),
     ]
+
+    pitch_planes = (pitch_left, pitch_right, pitch_front, pitch_back)
+    blk_planes   = (blk_left, blk_right, blk_front, blk_back)
+    cells.extend(_endbox_gap_cells('graphite_endbox_upper', water,
+        pitch_planes, blk_planes, _z_fuel_top, _z_endbox_above))
+    cells.extend(_endbox_gap_cells('graphite_endbox_lower', water,
+        pitch_planes, blk_planes, _z_endbox_below, _z_fuel_bot))
+
     return openmc.Universe(name='graphite_universe', cells=cells)
 
 
@@ -869,8 +996,9 @@ def build_core_geometry(withdrawn_fraction=0.0):
 
     This is the single construction path used by core.build_model() and all
     run/ drivers. Vacuum boundaries at the lattice edge and at
-    CORE_BOTTOM=-65 / CORE_TOP=+95 accommodate the full axial stack
-    (water/end-box/fuel/end-box/water) plus blade travel (top +90 at f=1).
+    CORE_BOTTOM=-90 / CORE_TOP=+90 accommodate the full axial stack
+    (water/end-box/fuel/end-box/water); the withdrawn (f=1) blade top
+    coincides exactly with CORE_TOP, so there is no water cap above it.
     """
     std_elems  = [make_standard_fuel_element(i) for i in range(23)]
     ctrl_elems = [make_control_fuel_element(100 + i,
@@ -937,6 +1065,9 @@ if __name__ == '__main__':
     print(f"End-box above:        [{+HALF_Z}, {ENDBOX_ABOVE_TOP}] cm")
     print(f"End-box below:        [{ENDBOX_BELOW_BOT}, {-HALF_Z}] cm")
     print(f"Core z-bounds:        [{CORE_BOTTOM}, {CORE_TOP}] cm (vacuum)")
+    print(f"End-box gap width:    GAP_X={GAP_X:.4f} cm, GAP_Y={GAP_Y:.4f} cm "
+          f"(same pitch/envelope surfaces reused for active-zone and "
+          f"end-box gap cells — no separate value possible)")
     print(f"\nBlade model:")
     print(f"  BLADE_LENGTH = {BLADE_LENGTH} cm (fixed)")
     print(f"  ROD_TRAVEL   = {ROD_TRAVEL} cm")
@@ -988,4 +1119,16 @@ if __name__ == '__main__':
     )
     with tempfile.TemporaryDirectory() as _debug_dir:
         debug_model.run(geometry_debug=True, cwd=_debug_dir)
-    print("\nOverlap check passed: no cell overlaps detected.")
+    print("\nOverlap check (f=0.0) passed: no cell overlaps detected.")
+
+    # f=1.0 exercises the degenerate case introduced by the axial resize:
+    # blade_z_top == CORE_TOP exactly (three coincident ZPlane objects at the
+    # withdrawn blade top / upper_water boundary / global vacuum boundary).
+    geometry_f1 = build_core_geometry(withdrawn_fraction=1.0)
+    debug_model_f1 = openmc.Model(
+        geometry=geometry_f1, materials=_materials, settings=_settings
+    )
+    with tempfile.TemporaryDirectory() as _debug_dir_f1:
+        debug_model_f1.run(geometry_debug=True, cwd=_debug_dir_f1)
+    print("Overlap check (f=1.0) passed: no cell overlaps detected "
+          "(blade top coincident with CORE_TOP vacuum boundary).")
