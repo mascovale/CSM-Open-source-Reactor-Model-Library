@@ -82,10 +82,14 @@ PITCH_Y = 8.1   # cm
 source_box = openmc.stats.Box(
     lower_left  = (-3 * PITCH_X, -3 * PITCH_Y, -30.0),
     upper_right = ( 3 * PITCH_X,  3 * PITCH_Y,  30.0),
-    only_fissionable=True   # only place source points in fissionable material
 )
 
-settings.source = openmc.IndependentSource(space=source_box)
+# 'constraints' replaces the deprecated Box(only_fissionable=True) in 0.15.0:
+# source points are rejected unless they land in fissionable material.
+settings.source = openmc.IndependentSource(
+    space=source_box,
+    constraints={'fissionable': True},
+)
 
 # =============================================================================
 # OUTPUT OPTIONS
@@ -103,15 +107,13 @@ settings.output = {
 # =============================================================================
 # TEMPERATURE SETTINGS
 #
-# Cross sections are temperature dependent. We specify the default
-# temperature for all materials (room temperature / cold zero power).
-# Units: Kelvin
-#
-# 293 K ≈ 20°C — cold zero power condition (all-fresh core validation)
-# 350 K ≈ 77°C — approximate operating temperature at 10 MW
+# Cross sections are temperature dependent. 'interpolation' interpolates
+# between library temperatures; 'default': 294.0 makes any material WITHOUT an
+# explicit .temperature evaluate at the deck's 294 K basis instead of OpenMC's
+# built-in 293.6 K. (Flux-trap water sets its own 316.8 K explicitly.)
 # =============================================================================
 
-settings.temperature = {'method': 'interpolation'}
+settings.temperature = {'method': 'interpolation', 'default': 294.0}
 
 # =============================================================================
 # EXPORT SETTINGS TO XML

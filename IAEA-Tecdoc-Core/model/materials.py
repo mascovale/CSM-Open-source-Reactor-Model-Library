@@ -19,16 +19,18 @@ import openmc
 # =============================================================================
 # FUEL MATERIAL
 # LEU U3Si2-Al fuel, 19.75 w/o enriched uranium
-# Fuel meat density: ~4.8 g/cm3 (U3Si2 dispersed in Al matrix)
+# Atom densities (atom/b-cm) taken directly from the reference MCNP deck.
+# NO thermal scattering table on the fuel (deck has no mt card for it).
 # =============================================================================
 
 fuel = openmc.Material(name='LEU_U3Si2_Al_fuel')
-fuel.set_density('g/cm3', 6.42)
-fuel.add_nuclide('U235', 0.1369, 'wo')
-fuel.add_nuclide('U238', 0.5562, 'wo')
-fuel.add_element('Si', 0.0545, 'wo')
-fuel.add_element('Al', 0.2524, 'wo')
-fuel.add_s_alpha_beta('c_Al27')  # thermal scattering for Al
+fuel.add_nuclide('U235', 2.251800e-03)   # atom/b-cm
+fuel.add_nuclide('U238', 9.034100e-03)
+fuel.add_nuclide('Al27', 3.256300e-02)
+fuel.add_nuclide('Si28', 6.938766e-03)
+fuel.add_nuclide('Si29', 3.524947e-04)
+fuel.add_nuclide('Si30', 2.326390e-04)
+fuel.set_density('sum')
 
 # =============================================================================
 # CLADDING MATERIAL
@@ -38,41 +40,34 @@ fuel.add_s_alpha_beta('c_Al27')  # thermal scattering for Al
 
 clad = openmc.Material(name='Al_6061_cladding')
 clad.set_density('g/cm3', 2.70)
-clad.add_element('Al', 1.00, 'wo')
-# below is the detailed composition of 6061-T6 aluminum alloy, but for simplicity,
-# we will use pure aluminum in the model. The minor alloying elements have negligible effects.
-# clad.add_element('Al', 0.9733, 'wo') 
-# clad.add_element('Mg', 0.0100, 'wo')
-# clad.add_element('Si', 0.0060, 'wo')
-# clad.add_element('Cu', 0.0028, 'wo')
-# clad.add_element('Cr', 0.0020, 'wo')
-# clad.add_element('Zn', 0.0025, 'wo')
-# clad.add_element('Ti', 0.0015, 'wo')
-# clad.add_element('Fe', 0.0019, 'wo')
+clad.add_element('Al', 1.00, 'ao')
+# Pure aluminum stands in for 6061-T6; the minor alloying elements (Mg, Si, Cu,
+# Cr, Zn, Ti, Fe — ~2.7 w/o total) have negligible reactivity effect here.
+# NO S(a,b) on cladding aluminum (deck has no mt card for Al):
 # clad.add_s_alpha_beta('c_Al27')
 
 # =============================================================================
 # COOLANT / MODERATOR
-# Two water temperatures per MCNP deck cross-section assignments:
-#   - Bulk pool water:     294 K (~21 °C)
-#   - Flux trap water:     316.8 K (~43.8 °C)
-# Density 0.993 g/cm³ is used for both; the deck was not available to verify
-# whether a different density is specified for the flux trap temperature.
-# OPEN ITEM: confirm flux-trap water density from Kyle's MCNP deck (at 316.8 K
-# the physical density is ~0.990 g/cm³; update if deck uses a distinct value).
+# Two water materials per MCNP deck cross-section assignments:
+#   - Bulk pool water:  0.9975 g/cm³ at 294 K   (H1 = 6.66909e-2 atom/b-cm)
+#   - Flux trap water:  0.9909 g/cm³ at 316.8 K (H1 = 6.625423e-2 atom/b-cm)
+# (Mass densities print ~0.02% lower than the nominal values because the
+# O-16-only basis has a slightly lower molar mass than natural oxygen; the
+# H1/O16 atom densities above are the deck-authoritative quantities.)
 # =============================================================================
 
+# Water is H-1 + O-16 ONLY (no H-2/O-17/O-18), matching the deck's O-16 basis.
 water = openmc.Material(name='light_water_294K')
 water.temperature = 294.0
 water.add_nuclide('H1', 6.66909e-02)
-water.add_element('O', 6.66909e-02 / 2.0)
+water.add_nuclide('O16', 6.66909e-02 / 2.0)
 water.set_density('sum')
 water.add_s_alpha_beta('c_H_in_H2O')
 
 water_flux_trap = openmc.Material(name='light_water_flux_trap_316K')
 water_flux_trap.temperature = 316.8
 water_flux_trap.add_nuclide('H1', 6.625423e-02)
-water_flux_trap.add_element('O', 6.625423e-02 / 2.0)
+water_flux_trap.add_nuclide('O16', 6.625423e-02 / 2.0)
 water_flux_trap.set_density('sum')
 water_flux_trap.add_s_alpha_beta('c_H_in_H2O')
 
@@ -100,11 +95,13 @@ water_flux_trap.add_s_alpha_beta('c_H_in_H2O')
 # b4c.add_element('C', 1.0, 'ao')
 
 b4c = openmc.Material(name='B4C control absorber')
+b4c.temperature = 294.0
 b4c.add_nuclide('B10', 1.914973e-02)
 b4c.add_nuclide('B11', 7.010412e-02)
 b4c.add_nuclide('C12', 2.005592e-02 * 0.9893)
 b4c.add_nuclide('C13', 2.005592e-02 * 0.0107)
 b4c.set_density('sum')
+# NO S(a,b) on B4C carbon (deck has no mt card for it).
 # b4c.add_nuclide('B10', 1.914973e-02)   # atom/b-cm
 # b4c.add_nuclide('B11', 7.010412e-02)
 # b4c.add_nuclide('C0',  2.005592e-02)
@@ -113,8 +110,8 @@ b4c.set_density('sum')
 
 # =============================================================================
 # REFLECTOR MATERIAL
-# Beryllium (Be) reflector blocks surrounding the core
-# Density: 1.85 g/cm3
+# Graphite reflector blocks surrounding the core
+# Density: 1.70 g/cm3
 # =============================================================================
 
 graphite = openmc.Material(name='graphite_reflector')
@@ -131,16 +128,7 @@ graphite.add_s_alpha_beta('c_Graphite')
 aluminum = openmc.Material(name='aluminum_structure')
 aluminum.set_density('g/cm3', 2.70)
 aluminum.add_element('Al', 1.0, 'ao')
-aluminum.add_s_alpha_beta('c_Al27')
-
-# =============================================================================
-# VOID / AIR (for dry experimental tubes or gaps)
-# =============================================================================
-
-air = openmc.Material(name='air')
-air.set_density('g/cm3', 0.001205)
-air.add_element('N', 0.784, 'ao')
-air.add_element('O', 0.216, 'ao')
+# NO S(a,b) on structural aluminum (deck has no mt card for Al).
 
 # =============================================================================
 # END-BOX HOMOGENIZED MATERIAL
@@ -160,13 +148,14 @@ _n_h   = _vf_h2o * _rho_h2o / 18.015 * 2.0    # H  (2 atoms per H₂O)
 _n_o   = _vf_h2o * _rho_h2o / 18.015 * 1.0    # O
 _n_tot = _n_al + _n_h + _n_o
 
+# Water component is H-1 + O-16 ONLY (no H-2/O-17/O-18) per the deck.
 end_box_homog = openmc.Material(name='end_box_homogenized')
 end_box_homog.set_density('g/cm3', _vf_al * _rho_al + _vf_h2o * _rho_h2o)  # 1.41975
-end_box_homog.add_element('Al', _n_al / _n_tot, 'ao')
-end_box_homog.add_element('H',  _n_h  / _n_tot, 'ao')
-end_box_homog.add_element('O',  _n_o  / _n_tot, 'ao')
+end_box_homog.add_nuclide('Al27', _n_al / _n_tot)
+end_box_homog.add_nuclide('H1',   _n_h  / _n_tot)
+end_box_homog.add_nuclide('O16',  _n_o  / _n_tot)
 end_box_homog.add_s_alpha_beta('c_H_in_H2O')
-end_box_homog.add_s_alpha_beta('c_Al27')
+# NO S(a,b) on the aluminum component (deck has no mt card for Al).
 
 # =============================================================================
 # Collect all materials into a Materials object for export
@@ -180,7 +169,6 @@ materials = openmc.Materials([
     b4c,
     graphite,
     aluminum,
-    air,
     end_box_homog,
 ])
 

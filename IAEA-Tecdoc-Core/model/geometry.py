@@ -47,7 +47,7 @@ All dimensions in cm.
 """
 
 import openmc
-from materials import fuel, clad, water, water_flux_trap, b4c, graphite, aluminum, air, end_box_homog
+from materials import fuel, clad, water, water_flux_trap, b4c, graphite, aluminum, end_box_homog
 
 # =============================================================================
 # LATTICE / ELEMENT ENVELOPE
@@ -336,14 +336,27 @@ def make_standard_fuel_element(elem_id):
 
 # =============================================================================
 # CONTROL ELEMENT
-# Architecture: two end sandwiches + central 17-plate fuel follower stack.
-#   Each end (from element face inward, per TECDOC-643 v2 p.32 Fig.2 + Table 1):
-#     [Al guide 0.127 | H₂O 0.268 | Hf/H₂O 0.310 | H₂O 0.243 | Al slider 0.127]
-#     = 1.075 cm per end  (GUIDE_REGION)
-#   Fuel region: ELEM_Y - 2×1.075 = 5.85 cm; 17 plates at pitch 5.85/17.
+# Architecture: two end blocks + central 17-plate fuel follower stack, built
+# on the SAME standard 0.127 cm plate / 0.219 cm channel pitch as the standard
+# fuel element (TECDOC A-2 Table 1: "17 + 4 Al plates").
+#
+#   Follower fuel stack (17 plates + 16 channels), centered on the element:
+#     half-width = (17*PLATE_THICK_INNER + 16*WATER_CHAN_THICK) / 2 = 2.8315 cm
+#
+#   Each end, from the fuel stack outward to the element wall:
+#     [feeder channel 0.219 | Al inner guide 0.150 | blade water g |
+#      B4C blade slot 0.310 | blade water g | Al outer guide 0.150 |
+#      outer offset water OUTER_OFFSET]
+#   The feeder channel is a standard fuel-to-fuel water channel (matches the
+#   follower's own plate pitch). The two blade-flanking water gaps are EQUAL
+#   (even spacing) and are the residual after every other layer is fixed:
+#     g = (END_BLOCK - 2*CTRL_AL_PLATE_THICK - ABSORBER_THICK - CTRL_OUTER_OFFSET
+#          - CTRL_FEEDER_CHANNEL) / 2
+#   where END_BLOCK = ELEM_Y/2 - CTRL_FUEL_STACK_HALF (1.1685 cm, fixed by the
+#   element envelope and the fuel stack half-width above).
 #
 # Fixed-length sliding blade:
-#   The Hf absorber blade is BLADE_LENGTH=60 cm long and translates in z.
+#   The B4C absorber blade is BLADE_LENGTH=60 cm long and translates in z.
 #   At fraction f, the blade occupies z=[z_bot, z_top] = [-30+f*60, +30+f*60].
 #   b4c fills the Hf-slot x/y band for z in [z_bot, z_top] across the
 #   full model height. Water fills the slot below z_bot and above z_top.
@@ -352,30 +365,51 @@ def make_standard_fuel_element(elem_id):
 # =============================================================================
 
 ABSORBER_THICK  = 0.31
-ABSORBER_GAP    = 0.395
-GUIDE_REGION    = 1.075
 
 CTRL_FUEL_WIDTH_X   = ACTIVE_STACK_X
 CTRL_SIDE_PLATE_X   = SIDE_PLATE_THICK
 CTRL_AL_PLATE_THICK = .15
 CTRL_HF_THICK       = ABSORBER_THICK
 
-CTRL_INNER_WATER = ABSORBER_GAP - CTRL_AL_PLATE_THICK
-CTRL_OUTER_WATER = GUIDE_REGION - ABSORBER_GAP - ABSORBER_THICK - CTRL_AL_PLATE_THICK
+N_CTRL_FUEL_PLATES  = 17
+CTRL_PLATE_PITCH    = PLATE_THICK_INNER + WATER_CHAN_THICK   # 0.346 cm
 
-N_CTRL_FUEL_PLATES = 17
+# Follower fuel stack half-width (standard 0.127/0.219 pitch, symmetric)
+CTRL_FUEL_STACK_HALF = (N_CTRL_FUEL_PLATES * PLATE_THICK_INNER
+                        + (N_CTRL_FUEL_PLATES - 1) * WATER_CHAN_THICK) / 2.0  # 2.8315 cm
+
+CTRL_FEEDER_CHANNEL = WATER_CHAN_THICK   # 0.219 cm — same as a fuel-fuel channel
+
+# PLACEHOLDER — CONFIRM VS DECK. Small inward offset of the outer guide/slider
+# from the element wall (currently no deck value available).
+CTRL_OUTER_OFFSET = 0.05   # cm
+
+# End-block budget: everything between the fuel stack edge and the wall.
+CTRL_END_BLOCK = ELEM_Y / 2.0 - CTRL_FUEL_STACK_HALF   # 1.1685 cm
+
+# Blade-flanking water gap — residual, split equally on both sides of the
+# blade. Recomputes automatically if CTRL_OUTER_OFFSET (or any layer above)
+# changes.
+CTRL_BLADE_WATER = (CTRL_END_BLOCK - CTRL_FEEDER_CHANNEL
+                    - 2.0 * CTRL_AL_PLATE_THICK - ABSORBER_THICK
+                    - CTRL_OUTER_OFFSET) / 2.0   # 0.14475 cm
+
+assert CTRL_BLADE_WATER >= 0.05, (
+    f"CTRL_BLADE_WATER={CTRL_BLADE_WATER:.5f} cm is degenerate for "
+    f"CTRL_AL_PLATE_THICK={CTRL_AL_PLATE_THICK}, "
+    f"CTRL_OUTER_OFFSET={CTRL_OUTER_OFFSET} — check end-block budget")
 
 
 def make_control_fuel_element(elem_id, withdrawn_fraction=0.0):
     """
-    Control fuel element with a fixed-length (60 cm) Hf absorber blade that
+    Control fuel element with a fixed-length (60 cm) B4C absorber blade that
     translates in z.
 
     withdrawn_fraction f in [0, 1]:
         f=0 → blade at z=[-30, +30] (all-in, blade fully within active fuel)
         f=1 → blade at z=[+30, +90] (all-out, blade entirely above active fuel)
 
-    The Hf blade always exists; only its z-position changes.
+    The blade always exists; only its z-position changes.
     """
     f = withdrawn_fraction
     z_bot = -HALF_Z + f * ROD_TRAVEL   # blade bottom
@@ -417,51 +451,61 @@ def make_control_fuel_element(elem_id, withdrawn_fraction=0.0):
     meat_left  = openmc.XPlane(x0=-MEAT_WIDTH / 2.0)
     meat_right = openmc.XPlane(x0= MEAT_WIDTH / 2.0)
 
-    # Y-layout
-    sandwich_per_end = GUIDE_REGION
-    fuel_height  = ELEM_Y - 2.0 * sandwich_per_end   # 5.85 cm
-    plate_pitch  = fuel_height / N_CTRL_FUEL_PLATES
-    half_chan     = (plate_pitch - PLATE_THICK_INNER) / 2.0
+    # Y-layout — fuel stack is centered, half-width fixed by the standard
+    # 0.127/0.219 pitch (CTRL_FUEL_STACK_HALF, module level).
+    y_fuel_start = -CTRL_FUEL_STACK_HALF   # −2.8315 cm
+    y_fuel_end   =  CTRL_FUEL_STACK_HALF   # +2.8315 cm
 
-    y_fuel_start = -ELEM_Y / 2.0 + sandwich_per_end   # −2.925 cm
-    y_fuel_end   =  ELEM_Y / 2.0 - sandwich_per_end   # +2.925 cm
+    # Bottom end block, built outward from the fuel stack to the wall:
+    #   feeder channel (0.219) | inner guide (Al) | blade water (g) |
+    #   B4C blade slot | blade water (g) | outer guide (Al) | outer offset water
+    bot_slider_top = openmc.YPlane(y0=y_fuel_start - CTRL_FEEDER_CHANNEL)
+    bot_slider_bot = openmc.YPlane(y0=bot_slider_top.y0 - CTRL_AL_PLATE_THICK)
+    bot_hf_top     = openmc.YPlane(y0=bot_slider_bot.y0 - CTRL_BLADE_WATER)
+    bot_hf_bot     = openmc.YPlane(y0=bot_hf_top.y0 - ABSORBER_THICK)
+    bot_guide_top  = openmc.YPlane(y0=bot_hf_bot.y0 - CTRL_BLADE_WATER)
+    bot_offset_top = openmc.YPlane(y0=bot_guide_top.y0 - CTRL_AL_PLATE_THICK)
+    # bot_offset_top should coincide with elem_front + CTRL_OUTER_OFFSET
+    assert abs(bot_offset_top.y0 - (-ELEM_Y / 2.0 + CTRL_OUTER_OFFSET)) < 1e-9, \
+        "control end-block budget does not reach the element wall (bottom)"
 
-    # Bottom sandwich surfaces (from elem_front going +y)
-    bot_guide_top  = openmc.YPlane(y0=-ELEM_Y/2 + CTRL_AL_PLATE_THICK)
-    bot_hf_bot     = openmc.YPlane(y0=-ELEM_Y/2 + ABSORBER_GAP)
-    bot_hf_top     = openmc.YPlane(y0=-ELEM_Y/2 + ABSORBER_GAP + ABSORBER_THICK)
-    bot_slider_bot = openmc.YPlane(y0=y_fuel_start - CTRL_AL_PLATE_THICK)
-    bot_slider_top = openmc.YPlane(y0=y_fuel_start)
-
-    # Top sandwich surfaces (from y_fuel_end going +y to elem_back)
-    top_slider_bot = openmc.YPlane(y0=y_fuel_end)
-    top_slider_top = openmc.YPlane(y0=y_fuel_end + CTRL_AL_PLATE_THICK)
-    top_hf_bot     = openmc.YPlane(y0=y_fuel_end + CTRL_AL_PLATE_THICK + CTRL_OUTER_WATER)
-    top_hf_top     = openmc.YPlane(y0=y_fuel_end + CTRL_AL_PLATE_THICK + CTRL_OUTER_WATER
-                                                  + ABSORBER_THICK)
-    top_guide_bot  = openmc.YPlane(y0=y_fuel_end + CTRL_AL_PLATE_THICK + CTRL_OUTER_WATER
-                                                  + ABSORBER_THICK + CTRL_INNER_WATER)
+    # Top end block — mirror image, built outward from the fuel stack to the wall.
+    top_slider_bot = openmc.YPlane(y0=y_fuel_end + CTRL_FEEDER_CHANNEL)
+    top_slider_top = openmc.YPlane(y0=top_slider_bot.y0 + CTRL_AL_PLATE_THICK)
+    top_hf_bot     = openmc.YPlane(y0=top_slider_top.y0 + CTRL_BLADE_WATER)
+    top_hf_top     = openmc.YPlane(y0=top_hf_bot.y0 + ABSORBER_THICK)
+    top_guide_bot  = openmc.YPlane(y0=top_hf_top.y0 + CTRL_BLADE_WATER)
+    top_guide_top  = openmc.YPlane(y0=top_guide_bot.y0 + CTRL_AL_PLATE_THICK)
+    assert abs(top_guide_top.y0 - (ELEM_Y / 2.0 - CTRL_OUTER_OFFSET)) < 1e-9, \
+        "control end-block budget does not reach the element wall (top)"
 
     # Hf slot x/y footprints (unbounded in z — blade cells own their z-range)
     hf_slot_b = +bot_hf_bot & -bot_hf_top & +side_inner_left & -side_inner_right
     hf_slot_t = +top_hf_bot & -top_hf_top & +side_inner_left & -side_inner_right
 
     # ── Bottom sandwich structural cells (active zone only) ─────────────────
+    # Wall -> fuel: offset water | outer guide | blade water | [blade] |
+    #               blade water | inner guide | feeder channel | fuel
 
     cells.append(openmc.Cell(
-        name=f'ctrl{elem_id}_guide_bottom', fill=aluminum,
-        region=(+elem_front & -bot_guide_top &
+        name=f'ctrl{elem_id}_offset_water_bottom', fill=water,
+        region=(+elem_front & -bot_offset_top &
                 +side_inner_left & -side_inner_right & active_z)))
 
     cells.append(openmc.Cell(
-        name=f'ctrl{elem_id}_inner_water_bottom', fill=water,
+        name=f'ctrl{elem_id}_guide_bottom', fill=aluminum,
+        region=(+bot_offset_top & -bot_guide_top &
+                +side_inner_left & -side_inner_right & active_z)))
+
+    cells.append(openmc.Cell(
+        name=f'ctrl{elem_id}_blade_water_outer_bottom', fill=water,
         region=(+bot_guide_top & -bot_hf_bot &
                 +side_inner_left & -side_inner_right & active_z)))
 
     # (Hf slot cells are handled separately below — not bounded to active_z)
 
     cells.append(openmc.Cell(
-        name=f'ctrl{elem_id}_outer_water_bottom', fill=water,
+        name=f'ctrl{elem_id}_blade_water_inner_bottom', fill=water,
         region=(+bot_hf_top & -bot_slider_bot &
                 +side_inner_left & -side_inner_right & active_z)))
 
@@ -471,6 +515,8 @@ def make_control_fuel_element(elem_id, withdrawn_fraction=0.0):
                 +side_inner_left & -side_inner_right & active_z)))
 
     # ── Top sandwich structural cells (active zone only) ────────────────────
+    # Fuel -> wall: feeder channel | inner guide | blade water | [blade] |
+    #               blade water | outer guide | offset water
 
     cells.append(openmc.Cell(
         name=f'ctrl{elem_id}_slider_top', fill=aluminum,
@@ -478,22 +524,27 @@ def make_control_fuel_element(elem_id, withdrawn_fraction=0.0):
                 +side_inner_left & -side_inner_right & active_z)))
 
     cells.append(openmc.Cell(
-        name=f'ctrl{elem_id}_outer_water_top', fill=water,
+        name=f'ctrl{elem_id}_blade_water_inner_top', fill=water,
         region=(+top_slider_top & -top_hf_bot &
                 +side_inner_left & -side_inner_right & active_z)))
 
     cells.append(openmc.Cell(
-        name=f'ctrl{elem_id}_inner_water_top', fill=water,
+        name=f'ctrl{elem_id}_blade_water_outer_top', fill=water,
         region=(+top_hf_top & -top_guide_bot &
                 +side_inner_left & -side_inner_right & active_z)))
 
     cells.append(openmc.Cell(
         name=f'ctrl{elem_id}_guide_top', fill=aluminum,
-        region=(+top_guide_bot & -elem_back &
+        region=(+top_guide_bot & -top_guide_top &
                 +side_inner_left & -side_inner_right & active_z)))
 
-    # ── Fixed-length Hf blade — spans full model height in 3 pieces ─────────
-    # Hf:          [z_bot, z_top]   (blade body)
+    cells.append(openmc.Cell(
+        name=f'ctrl{elem_id}_offset_water_top', fill=water,
+        region=(+top_guide_top & -elem_back &
+                +side_inner_left & -side_inner_right & active_z)))
+
+    # ── Fixed-length B4C blade — spans full model height in 3 pieces ────────
+    # B4C:         [z_bot, z_top]   (blade body)
     # Water below: [CORE_BOTTOM, z_bot]
     # Water above: [z_top, CORE_TOP]
 
@@ -524,7 +575,8 @@ def make_control_fuel_element(elem_id, withdrawn_fraction=0.0):
     plate_top_surfs = []
 
     for i in range(N_CTRL_FUEL_PLATES):
-        plate_bot = y_fuel_start + i * plate_pitch + half_chan
+        # Standard 0.127/0.219 pitch, same as the standard fuel element.
+        plate_bot = y_fuel_start + i * CTRL_PLATE_PITCH
         plate_top = plate_bot + PLATE_THICK_INNER
 
         plate_bot_s = openmc.YPlane(y0=plate_bot)
@@ -717,102 +769,163 @@ def make_flux_trap():
 water_cell = openmc.Cell(name='water_fill', fill=water)
 water_univ = openmc.Universe(name='water_universe', cells=[water_cell])
 
-# Graphite reflector universe: bounded axially to match the fuel element pattern.
-# Graphite occupies only the active fuel z-range [-30, +30]; above and below it
-# mirrors the fuel element end-box + water stack so the reflector height matches
-# the core height without contributing graphite outside the active zone.
-graphite_univ = openmc.Universe(
-    name='graphite_universe',
-    cells=[
+# Graphite reflector universe.
+#
+# In-plane: the reflector is NOT a solid block. Each reflector element is an
+# ELEM_X x ELEM_Y (7.6 x 8.0 cm) graphite block centered in its lattice cell,
+# with thin water gaps out to the pitch boundary — the same envelope/pitch
+# construction as the fuel elements, so the gap surfaces COINCIDE with the
+# fuel-lattice cell boundaries (0.05 cm water on each face).
+#
+# Axially: graphite occupies only the active fuel z-range [-30, +30]; above and
+# below, the full pitch footprint mirrors the fuel element end-box + water
+# stack so the reflector height matches the core height without contributing
+# graphite outside the active zone.
+def make_graphite_element():
+    """Graphite reflector element: 7.6 x 8.0 cm block + water gaps to the pitch."""
+    pitch_left  = openmc.XPlane(x0=-PITCH_X / 2.0)
+    pitch_right = openmc.XPlane(x0= PITCH_X / 2.0)
+    pitch_front = openmc.YPlane(y0=-PITCH_Y / 2.0)
+    pitch_back  = openmc.YPlane(y0= PITCH_Y / 2.0)
+
+    blk_left  = openmc.XPlane(x0=-ELEM_X / 2.0)
+    blk_right = openmc.XPlane(x0= ELEM_X / 2.0)
+    blk_front = openmc.YPlane(y0=-ELEM_Y / 2.0)
+    blk_back  = openmc.YPlane(y0= ELEM_Y / 2.0)
+
+    active_z   = +_z_fuel_bot & -_z_fuel_top
+    full_pitch = +pitch_left & -pitch_right & +pitch_front & -pitch_back
+
+    cells = [
         openmc.Cell(
-            name='graphite_active',
+            name='graphite_block',
             fill=graphite,
-            region=+_z_fuel_bot & -_z_fuel_top,              # −30 → +30 cm
+            region=(+blk_left & -blk_right &
+                    +blk_front & -blk_back & active_z),
         ),
+        # Thin inter-element water gaps (active zone only) — identical layout
+        # to the fuel elements' gap cells.
+        openmc.Cell(
+            name='graphite_gap_xleft',
+            fill=water,
+            region=(+pitch_left & -blk_left &
+                    +pitch_front & -pitch_back & active_z),
+        ),
+        openmc.Cell(
+            name='graphite_gap_xright',
+            fill=water,
+            region=(+blk_right & -pitch_right &
+                    +pitch_front & -pitch_back & active_z),
+        ),
+        openmc.Cell(
+            name='graphite_gap_yfront',
+            fill=water,
+            region=(+blk_left & -blk_right &
+                    +pitch_front & -blk_front & active_z),
+        ),
+        openmc.Cell(
+            name='graphite_gap_yback',
+            fill=water,
+            region=(+blk_left & -blk_right &
+                    +blk_back & -pitch_back & active_z),
+        ),
+        # Axial stack above/below the active zone (full pitch footprint)
         openmc.Cell(
             name='graphite_upper_endbox',
             fill=end_box_homog,
-            region=+_z_fuel_top & -_z_endbox_above,           # +30 → +45 cm
+            region=full_pitch & +_z_fuel_top & -_z_endbox_above,   # +30 → +45 cm
         ),
         openmc.Cell(
             name='graphite_upper_water',
             fill=water,
-            region=+_z_endbox_above & -_z_model_top,          # +45 → +95 cm
+            region=full_pitch & +_z_endbox_above & -_z_model_top,  # +45 → +95 cm
         ),
         openmc.Cell(
             name='graphite_lower_endbox',
             fill=end_box_homog,
-            region=+_z_endbox_below & -_z_fuel_bot,           # −45 → −30 cm
+            region=full_pitch & +_z_endbox_below & -_z_fuel_bot,   # −45 → −30 cm
         ),
         openmc.Cell(
             name='graphite_lower_water',
             fill=water,
-            region=+_z_model_bot & -_z_endbox_below,          # −65 → −45 cm
+            region=full_pitch & +_z_model_bot & -_z_endbox_below,  # −65 → −45 cm
         ),
-    ],
-)
+    ]
+    return openmc.Universe(name='graphite_universe', cells=cells)
+
+
+graphite_univ = make_graphite_element()
 
 
 # =============================================================================
 # CORE LATTICE — TECDOC-643 Fig. 2.1 (LEU panel)
 # =============================================================================
 
-std_elems  = [make_standard_fuel_element(i) for i in range(23)]
-ctrl_elems = [make_control_fuel_element(100 + i, withdrawn_fraction=0.0)
-              for i in range(5)]
+def build_core_geometry(withdrawn_fraction=0.0):
+    """Build the full-core openmc.Geometry for a blade WITHDRAWAL fraction f.
 
-W = water_univ
-G = graphite_univ
-S = std_elems
-C = ctrl_elems
-F = make_flux_trap()
+    f = 0.0 → blades fully INSERTED  (absorber spans z=[-30, +30])
+    f = 1.0 → blades fully WITHDRAWN (absorber spans z=[+30, +90])
 
-lattice_universes = [
-    [W, W, W, W, W, W, W, W],
-    [W, G, G, G, G, G, G, W],
-    [W, S[0],  S[1],  C[0],  S[2],  S[3],  S[4],  W],
-    [W, S[5],  S[6],  S[7],  S[8],  C[1],  S[9],  W],
-    [W, S[10], C[2],  S[11], F,     S[12], S[13], W],
-    [W, S[14], S[15], S[16], S[17], C[3],  S[18], W],
-    [W, F,     S[19], C[4],  S[20], S[21], S[22], W],
-    [W, G, G, G, G, G, G, W],
-    [W, W, W, W, W, W, W, W],
-]
+    This is the single construction path used by core.build_model() and all
+    run/ drivers. Vacuum boundaries at the lattice edge and at
+    CORE_BOTTOM=-65 / CORE_TOP=+95 accommodate the full axial stack
+    (water/end-box/fuel/end-box/water) plus blade travel (top +90 at f=1).
+    """
+    std_elems  = [make_standard_fuel_element(i) for i in range(23)]
+    ctrl_elems = [make_control_fuel_element(100 + i,
+                                            withdrawn_fraction=withdrawn_fraction)
+                  for i in range(5)]
 
-core_lattice = openmc.RectLattice(name='core_lattice')
-core_lattice.pitch      = (PITCH_X, PITCH_Y)
-core_lattice.lower_left = (-4 * PITCH_X, -4.5 * PITCH_Y)
-core_lattice.universes  = lattice_universes
+    W = water_univ
+    G = graphite_univ
+    S = std_elems
+    C = ctrl_elems
+    F = make_flux_trap()
+
+    lattice_universes = [
+        [W, W, W, W, W, W, W, W],
+        [W, G, G, G, G, G, G, W],
+        [W, S[0],  S[1],  C[0],  S[2],  S[3],  S[4],  W],
+        [W, S[5],  S[6],  S[7],  S[8],  C[1],  S[9],  W],
+        [W, S[10], C[2],  S[11], F,     S[12], S[13], W],
+        [W, S[14], S[15], S[16], S[17], C[3],  S[18], W],
+        [W, F,     S[19], C[4],  S[20], S[21], S[22], W],
+        [W, G, G, G, G, G, G, W],
+        [W, W, W, W, W, W, W, W],
+    ]
+
+    core_lattice = openmc.RectLattice(name='core_lattice')
+    core_lattice.pitch      = (PITCH_X, PITCH_Y)
+    core_lattice.lower_left = (-4 * PITCH_X, -4.5 * PITCH_Y)
+    core_lattice.universes  = lattice_universes
+    # Guard against edge-case lattice lookups just outside the universe array
+    # (floating-point roundoff at the boundary planes) — fill with bulk water
+    # instead of losing the particle.
+    core_lattice.outer      = water_univ
+
+    core_left   = openmc.XPlane(x0=-4   * PITCH_X, boundary_type='vacuum')
+    core_right  = openmc.XPlane(x0= 4   * PITCH_X, boundary_type='vacuum')
+    core_front  = openmc.YPlane(y0=-4.5 * PITCH_Y, boundary_type='vacuum')
+    core_back   = openmc.YPlane(y0= 4.5 * PITCH_Y, boundary_type='vacuum')
+    core_bottom = openmc.ZPlane(z0=CORE_BOTTOM,     boundary_type='vacuum')
+    core_top    = openmc.ZPlane(z0=CORE_TOP,        boundary_type='vacuum')
+
+    core_region = (
+        +core_left  & -core_right  &
+        +core_front & -core_back   &
+        +core_bottom & -core_top
+    )
+    core_cell = openmc.Cell(name='core_cell', fill=core_lattice,
+                            region=core_region)
+
+    root_universe = openmc.Universe(name='root', cells=[core_cell])
+    return openmc.Geometry(root_universe)
 
 
-# =============================================================================
-# CORE BOUNDING REGION
-# Vacuum boundaries at CORE_BOTTOM=-65 and CORE_TOP=+95 to accommodate
-# the full axial model stack (water/end-box/fuel/end-box/water) plus the
-# control blade travel range (blade top reaches +90 at f=1).
-# =============================================================================
-
-core_left   = openmc.XPlane(x0=-4   * PITCH_X, boundary_type='vacuum')
-core_right  = openmc.XPlane(x0= 4   * PITCH_X, boundary_type='vacuum')
-core_front  = openmc.YPlane(y0=-4.5 * PITCH_Y, boundary_type='vacuum')
-core_back   = openmc.YPlane(y0= 4.5 * PITCH_Y, boundary_type='vacuum')
-core_bottom = openmc.ZPlane(z0=CORE_BOTTOM,     boundary_type='vacuum')
-core_top    = openmc.ZPlane(z0=CORE_TOP,        boundary_type='vacuum')
-
-core_region = (
-    +core_left  & -core_right  &
-    +core_front & -core_back   &
-    +core_bottom & -core_top
-)
-core_cell = openmc.Cell(name='core_cell', fill=core_lattice, region=core_region)
-
-
-# =============================================================================
-# ROOT UNIVERSE AND GEOMETRY EXPORT
-# =============================================================================
-
-root_universe = openmc.Universe(name='root', cells=[core_cell])
-geometry      = openmc.Geometry(root_universe)
+# Module-level default geometry (blades fully inserted) — kept for direct
+# `python geometry.py` debug use; drivers should call build_core_geometry().
+geometry = build_core_geometry(withdrawn_fraction=0.0)
 
 
 if __name__ == '__main__':
@@ -835,21 +948,31 @@ if __name__ == '__main__':
               f"within [{CORE_BOTTOM},{CORE_TOP}]: {ok}")
 
     print(f"\nControl element layout:")
-    sandwich_v   = GUIDE_REGION
-    fuel_h_v     = ELEM_Y - 2.0 * sandwich_v
-    plate_pitch_v = fuel_h_v / N_CTRL_FUEL_PLATES
-    y_fs_v = -ELEM_Y / 2.0 + sandwich_v
-    y_fe_v =  ELEM_Y / 2.0 - sandwich_v
-    layer_sum = (CTRL_AL_PLATE_THICK + CTRL_INNER_WATER + ABSORBER_THICK
-                 + CTRL_OUTER_WATER + CTRL_AL_PLATE_THICK)
-    print(f"  Sandwich per end: {sandwich_v:.6f} cm")
-    print(f"  Fuel region:      [{y_fs_v:.6f}, {y_fe_v:.6f}] cm ({fuel_h_v:.6f} cm)")
-    print(f"  Plate pitch:      {plate_pitch_v:.8f} cm")
-    print(f"  Layer sum:        {layer_sum:.6f} cm (should be {GUIDE_REGION})")
+    print(f"  Fuel stack half-width (CTRL_FUEL_STACK_HALF): "
+          f"{CTRL_FUEL_STACK_HALF:.6f} cm")
+    print(f"  Fuel stack:       [{-CTRL_FUEL_STACK_HALF:.6f}, "
+          f"{CTRL_FUEL_STACK_HALF:.6f}] cm "
+          f"({2*CTRL_FUEL_STACK_HALF:.6f} cm, 17 plates @ pitch "
+          f"{CTRL_PLATE_PITCH:.6f} cm)")
+    print(f"  End block (each): {CTRL_END_BLOCK:.6f} cm "
+          f"(feeder {CTRL_FEEDER_CHANNEL:.5f} + guide {CTRL_AL_PLATE_THICK:.5f} "
+          f"+ blade-water {CTRL_BLADE_WATER:.5f} + blade {ABSORBER_THICK:.5f} "
+          f"+ blade-water {CTRL_BLADE_WATER:.5f} + guide {CTRL_AL_PLATE_THICK:.5f} "
+          f"+ offset {CTRL_OUTER_OFFSET:.5f})")
 
-    assert abs(layer_sum - GUIDE_REGION) < 1e-12, "guide-region layers do not sum"
-    assert abs(plate_pitch_v * N_CTRL_FUEL_PLATES - fuel_h_v) < 1e-12, \
-        "plate_pitch * N_plates != fuel_height"
+    end_block_layer_sum = (CTRL_FEEDER_CHANNEL + CTRL_AL_PLATE_THICK
+                           + CTRL_BLADE_WATER + ABSORBER_THICK
+                           + CTRL_BLADE_WATER + CTRL_AL_PLATE_THICK
+                           + CTRL_OUTER_OFFSET)
+    print(f"  End-block layer sum: {end_block_layer_sum:.6f} cm "
+          f"(should be {CTRL_END_BLOCK:.6f})")
+    print(f"  Total (2 ends + fuel stack): "
+          f"{2*end_block_layer_sum + 2*CTRL_FUEL_STACK_HALF:.6f} cm (should be {ELEM_Y})")
+
+    assert abs(end_block_layer_sum - CTRL_END_BLOCK) < 1e-9, \
+        "control end-block layers do not sum to CTRL_END_BLOCK"
+    assert abs(2*end_block_layer_sum + 2*CTRL_FUEL_STACK_HALF - ELEM_Y) < 1e-9, \
+        "control element total height != ELEM_Y"
 
     # Geometry overlap check
     import tempfile
