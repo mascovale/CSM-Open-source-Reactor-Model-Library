@@ -43,7 +43,9 @@ Standard Fuel Element (LEU, U3Si2-Al, heterogeneous build):
     - Envelope:           76 x 80 mm
     - Side plates:        4.8 mm each (aluminum, in x)
     - Active stack:       66.4 mm wide between side plate inner faces
-    - 23 plates:          1.27 mm inner, 1.385 mm outer
+    - 23 plates:          1.27 mm inner, 1.5 mm outer (outer plates clad on
+                          both faces of the meat at the outer 0.495 mm
+                          thickness, not just the face away from the stack)
     - Fuel meat:          0.51 mm thick x 63 mm wide x 600 mm tall
     - Inner clad:         0.38 mm  |  Outer clad: 0.495 mm
 
@@ -51,7 +53,7 @@ All dimensions in cm.
 """
 
 import openmc
-from materials import fuel, clad, water, water_flux_trap, b4c, graphite, aluminum, end_box_homog
+from materials import fuel, clad, water, water_core, b4c, graphite, aluminum, end_box_homog
 
 # =============================================================================
 # LATTICE / ELEMENT ENVELOPE
@@ -82,13 +84,17 @@ ACTIVE_STACK_X   = ELEM_X - 2 * SIDE_PLATE_THICK   # 6.64 cm
 # =============================================================================
 
 PLATE_THICK_INNER = 0.127    # cm  (1.27 mm)
-PLATE_THICK_OUTER = 0.1385   # cm  (1.385 mm)
 
 CLAD_THICK_INNER = 0.038     # cm  (0.38 mm)
 CLAD_THICK_OUTER = 0.0495    # cm  (0.495 mm)
 
 MEAT_THICK = 0.051           # cm  (0.51 mm)
 MEAT_WIDTH = 6.3             # cm  (63 mm)
+
+# Outer plates (first/last in the stack) are clad at the outer thickness on
+# BOTH faces of the meat, not just the face away from the stack — so their
+# total thickness is meat + 2*CLAD_THICK_OUTER, not meat + inner + outer.
+PLATE_THICK_OUTER = MEAT_THICK + 2 * CLAD_THICK_OUTER   # 0.15 cm  (1.5 mm)
 
 N_PLATES_STD  = 23
 N_PLATES_CTRL = 17
@@ -222,14 +228,13 @@ def make_standard_fuel_element(elem_id):
         plate_bottom = openmc.YPlane(y0=y)
         plate_top    = openmc.YPlane(y0=y + plate_thick)
 
-        if is_first:
+        if is_first or is_last:
+            # Outer plates: clad at the outer thickness on BOTH faces of the
+            # meat (not just the face away from the stack).
             clad_bottom = CLAD_THICK_OUTER
-            clad_top    = CLAD_THICK_INNER
-        elif is_last:
-            clad_bottom = CLAD_THICK_INNER
             clad_top    = CLAD_THICK_OUTER
         else:
-            clad_bottom = CLAD_THICK_INNER
+            clad_bottom = CLAD_THICK_INNER 
             clad_top    = CLAD_THICK_INNER
 
         meat_bottom = openmc.YPlane(y0=y + clad_bottom)
@@ -267,7 +272,7 @@ def make_standard_fuel_element(elem_id):
             chan_top    = openmc.YPlane(y0=y + WATER_CHAN_THICK)
             cells.append(openmc.Cell(
                 name=f'std{elem_id}_chan_{i}',
-                fill=water,
+                fill=water_core,
                 region=(
                     +side_inner_left & -side_inner_right &
                     +chan_bottom & -chan_top &
@@ -281,7 +286,7 @@ def make_standard_fuel_element(elem_id):
     # Water below and above the plate stack — active zone only
     cells.append(openmc.Cell(
         name=f'std{elem_id}_water_below_stack',
-        fill=water,
+        fill=water_core,
         region=(
             +box_front & -stack_bottom_surf &
             +side_inner_left & -side_inner_right &
@@ -290,7 +295,7 @@ def make_standard_fuel_element(elem_id):
     ))
     cells.append(openmc.Cell(
         name=f'std{elem_id}_water_above_stack',
-        fill=water,
+        fill=water_core,
         region=(
             +stack_top_surf & -box_back &
             +side_inner_left & -side_inner_right &
@@ -321,7 +326,7 @@ def make_standard_fuel_element(elem_id):
     # Inter-element water gaps — active zone only
     cells.append(openmc.Cell(
         name=f'std{elem_id}_gap_xleft',
-        fill=water,
+        fill=water_core,
         region=(
             +pitch_left & -box_left &
             +pitch_front & -pitch_back &
@@ -330,7 +335,7 @@ def make_standard_fuel_element(elem_id):
     ))
     cells.append(openmc.Cell(
         name=f'std{elem_id}_gap_xright',
-        fill=water,
+        fill=water_core,
         region=(
             +box_right & -pitch_right &
             +pitch_front & -pitch_back &
@@ -339,7 +344,7 @@ def make_standard_fuel_element(elem_id):
     ))
     cells.append(openmc.Cell(
         name=f'std{elem_id}_gap_yfront',
-        fill=water,
+        fill=water_core,
         region=(
             +box_left & -box_right &
             +pitch_front & -box_front &
@@ -348,7 +353,7 @@ def make_standard_fuel_element(elem_id):
     ))
     cells.append(openmc.Cell(
         name=f'std{elem_id}_gap_yback',
-        fill=water,
+        fill=water_core,
         region=(
             +box_left & -box_right &
             +box_back & -pitch_back &
@@ -388,9 +393,9 @@ def make_standard_fuel_element(elem_id):
 
     pitch_planes = (pitch_left, pitch_right, pitch_front, pitch_back)
     box_planes   = (box_left, box_right, box_front, box_back)
-    cells.extend(_endbox_gap_cells(f'std{elem_id}_endbox_upper', water,
+    cells.extend(_endbox_gap_cells(f'std{elem_id}_endbox_upper', water_core,
         pitch_planes, box_planes, _z_fuel_top, _z_endbox_above))
-    cells.extend(_endbox_gap_cells(f'std{elem_id}_endbox_lower', water,
+    cells.extend(_endbox_gap_cells(f'std{elem_id}_endbox_lower', water_core,
         pitch_planes, box_planes, _z_endbox_below, _z_fuel_bot))
 
     return openmc.Universe(name=f'std_fuel_elem_{elem_id}', cells=cells)
@@ -566,7 +571,7 @@ def make_control_fuel_element(elem_id, withdrawn_fraction=0.0):
     #               blade water | inner guide | feeder channel | fuel
 
     cells.append(openmc.Cell(
-        name=f'ctrl{elem_id}_offset_water_bottom', fill=water,
+        name=f'ctrl{elem_id}_offset_water_bottom', fill=water_core,
         region=(+elem_front & -bot_offset_top &
                 +side_inner_left & -side_inner_right & active_z)))
 
@@ -576,14 +581,14 @@ def make_control_fuel_element(elem_id, withdrawn_fraction=0.0):
                 +side_inner_left & -side_inner_right & active_z)))
 
     cells.append(openmc.Cell(
-        name=f'ctrl{elem_id}_blade_water_outer_bottom', fill=water,
+        name=f'ctrl{elem_id}_blade_water_outer_bottom', fill=water_core,
         region=(+bot_guide_top & -bot_hf_bot &
                 +side_inner_left & -side_inner_right & active_z)))
 
     # (Hf slot cells are handled separately below — not bounded to active_z)
 
     cells.append(openmc.Cell(
-        name=f'ctrl{elem_id}_blade_water_inner_bottom', fill=water,
+        name=f'ctrl{elem_id}_blade_water_inner_bottom', fill=water_core,
         region=(+bot_hf_top & -bot_slider_bot &
                 +side_inner_left & -side_inner_right & active_z)))
 
@@ -602,12 +607,12 @@ def make_control_fuel_element(elem_id, withdrawn_fraction=0.0):
                 +side_inner_left & -side_inner_right & active_z)))
 
     cells.append(openmc.Cell(
-        name=f'ctrl{elem_id}_blade_water_inner_top', fill=water,
+        name=f'ctrl{elem_id}_blade_water_inner_top', fill=water_core,
         region=(+top_slider_top & -top_hf_bot &
                 +side_inner_left & -side_inner_right & active_z)))
 
     cells.append(openmc.Cell(
-        name=f'ctrl{elem_id}_blade_water_outer_top', fill=water,
+        name=f'ctrl{elem_id}_blade_water_outer_top', fill=water_core,
         region=(+top_hf_top & -top_guide_bot &
                 +side_inner_left & -side_inner_right & active_z)))
 
@@ -617,7 +622,7 @@ def make_control_fuel_element(elem_id, withdrawn_fraction=0.0):
                 +side_inner_left & -side_inner_right & active_z)))
 
     cells.append(openmc.Cell(
-        name=f'ctrl{elem_id}_offset_water_top', fill=water,
+        name=f'ctrl{elem_id}_offset_water_top', fill=water_core,
         region=(+top_guide_top & -elem_back &
                 +side_inner_left & -side_inner_right & active_z)))
 
@@ -636,10 +641,10 @@ def make_control_fuel_element(elem_id, withdrawn_fraction=0.0):
     # above). There is never a gap above the blade inside the active zone,
     # since blade_z_top is always >= HALF_Z (asserted above).
     cells.append(openmc.Cell(
-        name=f'ctrl{elem_id}_slot_b_water_active', fill=water,
+        name=f'ctrl{elem_id}_slot_b_water_active', fill=water_core,
         region=hf_slot_b & +_z_fuel_bot & -blade_z_bot))
     cells.append(openmc.Cell(
-        name=f'ctrl{elem_id}_slot_t_water_active', fill=water,
+        name=f'ctrl{elem_id}_slot_t_water_active', fill=water_core,
         region=hf_slot_t & +_z_fuel_bot & -blade_z_bot))
 
     # Upper end-box / upper-water complements to the blade, in the Hf-slot
@@ -698,16 +703,16 @@ def make_control_fuel_element(elem_id, withdrawn_fraction=0.0):
 
     # Water channels (active zone only)
     cells.append(openmc.Cell(
-        name=f'ctrl{elem_id}_chan_bot_half', fill=water,
+        name=f'ctrl{elem_id}_chan_bot_half', fill=water_core,
         region=(+bot_slider_top & -plate_bot_surfs[0] &
                 +side_inner_left & -side_inner_right & active_z)))
     for i in range(N_CTRL_FUEL_PLATES - 1):
         cells.append(openmc.Cell(
-            name=f'ctrl{elem_id}_chan_{i}', fill=water,
+            name=f'ctrl{elem_id}_chan_{i}', fill=water_core,
             region=(+plate_top_surfs[i] & -plate_bot_surfs[i + 1] &
                     +side_inner_left & -side_inner_right & active_z)))
     cells.append(openmc.Cell(
-        name=f'ctrl{elem_id}_chan_top_half', fill=water,
+        name=f'ctrl{elem_id}_chan_top_half', fill=water_core,
         region=(+plate_top_surfs[-1] & -top_slider_bot &
                 +side_inner_left & -side_inner_right & active_z)))
 
@@ -723,19 +728,19 @@ def make_control_fuel_element(elem_id, withdrawn_fraction=0.0):
 
     # Inter-element water gaps (active zone only)
     cells.append(openmc.Cell(
-        name=f'ctrl{elem_id}_gap_xleft', fill=water,
+        name=f'ctrl{elem_id}_gap_xleft', fill=water_core,
         region=(+pitch_left & -elem_left &
                 +pitch_front & -pitch_back & active_z)))
     cells.append(openmc.Cell(
-        name=f'ctrl{elem_id}_gap_xright', fill=water,
+        name=f'ctrl{elem_id}_gap_xright', fill=water_core,
         region=(+elem_right & -pitch_right &
                 +pitch_front & -pitch_back & active_z)))
     cells.append(openmc.Cell(
-        name=f'ctrl{elem_id}_gap_yfront', fill=water,
+        name=f'ctrl{elem_id}_gap_yfront', fill=water_core,
         region=(+elem_left & -elem_right &
                 +pitch_front & -elem_front & active_z)))
     cells.append(openmc.Cell(
-        name=f'ctrl{elem_id}_gap_yback', fill=water,
+        name=f'ctrl{elem_id}_gap_yback', fill=water_core,
         region=(+elem_left & -elem_right &
                 +elem_back & -pitch_back & active_z)))
 
@@ -765,9 +770,9 @@ def make_control_fuel_element(elem_id, withdrawn_fraction=0.0):
 
     pitch_planes = (pitch_left, pitch_right, pitch_front, pitch_back)
     elem_planes  = (elem_left, elem_right, elem_front, elem_back)
-    cells.extend(_endbox_gap_cells(f'ctrl{elem_id}_endbox_upper', water,
+    cells.extend(_endbox_gap_cells(f'ctrl{elem_id}_endbox_upper', water_core,
         pitch_planes, elem_planes, _z_fuel_top, _z_endbox_above))
-    cells.extend(_endbox_gap_cells(f'ctrl{elem_id}_endbox_lower', water,
+    cells.extend(_endbox_gap_cells(f'ctrl{elem_id}_endbox_lower', water_core,
         pitch_planes, elem_planes, _z_endbox_below, _z_fuel_bot))
 
     return openmc.Universe(name=f'ctrl_fuel_elem_{elem_id}', cells=cells)
@@ -779,14 +784,22 @@ def make_control_fuel_element(elem_id, withdrawn_fraction=0.0):
 
 def make_flux_trap():
     """
-    Flux trap: aluminum block with a central cylindrical water hole (water_flux_trap
-    at 316.8 K), matching the MCNP deck which models the hole as a ZCylinder rather
-    than the originally-commented square.
+    Flux trap: aluminum block with a central cylindrical water hole (water_core
+    at 316.8 K, the same core coolant water used throughout the core), matching
+    the MCNP deck which models the hole as a ZCylinder rather than the
+    originally-commented square.
+
+    The aluminum block itself fills the FULL lattice pitch (PITCH_X x
+    PITCH_Y = 7.7 x 8.1 cm) — there is no inter-element water gap around the
+    active-zone block. The axial end-box (homogenized water/Al) region above
+    and below, however, keeps the SAME ELEM_X x ELEM_Y envelope/pitch grid as
+    the fuel and graphite elements — i.e. the core-element separation
+    channels continue through the end-box region here too, using core
+    coolant water (water_core) rather than the old bulk-water gap fill.
 
     Cylinder: radius FT_HOLE_RADIUS = 2.5 cm, centered at element origin (x=0, y=0).
     The cylinder is axially unbounded within the active zone (active_z clips it).
-    Aluminum fills the annular region between the cylinder and the element envelope.
-    Inter-element gaps and all axial regions use bulk water (294 K).
+    Aluminum fills the annular region between the cylinder and the pitch envelope.
     """
     pitch_left  = openmc.XPlane(x0=-PITCH_X / 2.0)
     pitch_right = openmc.XPlane(x0= PITCH_X / 2.0)
@@ -804,44 +817,22 @@ def make_flux_trap():
 
     cells = []
 
-    # Cylindrical water hole — hot flux trap water at 316.8 K
+    # Cylindrical water hole — core coolant water at 316.8 K
     cells.append(openmc.Cell(
         name='flux_trap_water_hole',
-        fill=water_flux_trap,
+        fill=water_core,
         region=-hole_cyl & active_z
     ))
-    # Aluminum block: element envelope minus the cylinder, active zone only
+    # Aluminum block: full pitch envelope minus the cylinder, active zone only
     cells.append(openmc.Cell(
         name='flux_trap_aluminum_block',
         fill=aluminum,
-        region=(+elem_left & -elem_right & +elem_front & -elem_back & +hole_cyl & active_z)
-    ))
-
-    # Inter-element water gaps (bulk water, active zone only)
-    cells.append(openmc.Cell(
-        name='flux_trap_gap_xleft',
-        fill=water,
-        region=(+pitch_left & -elem_left & +pitch_front & -pitch_back & active_z)
-    ))
-    cells.append(openmc.Cell(
-        name='flux_trap_gap_xright',
-        fill=water,
-        region=(+elem_right & -pitch_right & +pitch_front & -pitch_back & active_z)
-    ))
-    cells.append(openmc.Cell(
-        name='flux_trap_gap_yfront',
-        fill=water,
-        region=(+elem_left & -elem_right & +pitch_front & -elem_front & active_z)
-    ))
-    cells.append(openmc.Cell(
-        name='flux_trap_gap_yback',
-        fill=water,
-        region=(+elem_left & -elem_right & +elem_back & -pitch_back & active_z)
+        region=(+pitch_left & -pitch_right & +pitch_front & -pitch_back & +hole_cyl & active_z)
     ))
 
     # Axial regions above/below active fuel. End-box mirrors the active-core
-    # element/gap grid (envelope + thin pitch gaps via _endbox_gap_cells);
-    # water-beyond regions stay full pitch (uniform water).
+    # element/gap grid (envelope + thin pitch gaps via _endbox_gap_cells,
+    # filled with core coolant water); water-beyond stays full pitch.
     full_pitch = +pitch_left & -pitch_right & +pitch_front & -pitch_back
     envelope   = +elem_left & -elem_right & +elem_front & -elem_back
 
@@ -868,9 +859,9 @@ def make_flux_trap():
 
     pitch_planes = (pitch_left, pitch_right, pitch_front, pitch_back)
     elem_planes  = (elem_left, elem_right, elem_front, elem_back)
-    cells.extend(_endbox_gap_cells('flux_trap_endbox_upper', water,
+    cells.extend(_endbox_gap_cells('flux_trap_endbox_upper', water_core,
         pitch_planes, elem_planes, _z_fuel_top, _z_endbox_above))
-    cells.extend(_endbox_gap_cells('flux_trap_endbox_lower', water,
+    cells.extend(_endbox_gap_cells('flux_trap_endbox_lower', water_core,
         pitch_planes, elem_planes, _z_endbox_below, _z_fuel_bot))
 
     return openmc.Universe(name='flux_trap_universe', cells=cells)
@@ -887,18 +878,20 @@ water_univ = openmc.Universe(name='water_universe', cells=[water_cell])
 
 # Graphite reflector universe.
 #
-# In-plane: the reflector is NOT a solid block. Each reflector element is an
-# ELEM_X x ELEM_Y (7.6 x 8.0 cm) graphite block centered in its lattice cell,
-# with thin water gaps out to the pitch boundary — the same envelope/pitch
-# construction as the fuel elements, so the gap surfaces COINCIDE with the
-# fuel-lattice cell boundaries (0.05 cm water on each face).
+# In-plane: the graphite block itself IS a solid block — each reflector
+# element fills its full lattice pitch cell in the active-graphite z-range
+# (no inter-element water gaps), so adjacent reflector positions form one
+# continuous graphite wall.
 #
-# Axially: graphite occupies only the active fuel z-range [-30, +30]; above and
-# below, the full pitch footprint mirrors the fuel element end-box + water
-# stack so the reflector height matches the core height without contributing
-# graphite outside the active zone.
+# Axially: graphite occupies only the active fuel z-range [-30, +30]. Above
+# and below, the end-box (homogenized water/Al) region keeps the SAME
+# envelope/pitch grid as the fuel elements — i.e. the core-element gaps
+# continue through the end-box region for each reflector position, even
+# though the graphite wall above/below them is continuous. Water-beyond
+# stays full pitch, mirroring the fuel element end-box + water stack so the
+# reflector height matches the core height.
 def make_graphite_element():
-    """Graphite reflector element: 7.6 x 8.0 cm block + water gaps to the pitch."""
+    """Graphite reflector element: continuous wall in-plane, gapped end-box axially."""
     pitch_left  = openmc.XPlane(x0=-PITCH_X / 2.0)
     pitch_right = openmc.XPlane(x0= PITCH_X / 2.0)
     pitch_front = openmc.YPlane(y0=-PITCH_Y / 2.0)
@@ -917,38 +910,8 @@ def make_graphite_element():
         openmc.Cell(
             name='graphite_block',
             fill=graphite,
-            region=(+blk_left & -blk_right &
-                    +blk_front & -blk_back & active_z),
+            region=active_z,
         ),
-        # Thin inter-element water gaps (active zone only) — identical layout
-        # to the fuel elements' gap cells.
-        openmc.Cell(
-            name='graphite_gap_xleft',
-            fill=water,
-            region=(+pitch_left & -blk_left &
-                    +pitch_front & -pitch_back & active_z),
-        ),
-        openmc.Cell(
-            name='graphite_gap_xright',
-            fill=water,
-            region=(+blk_right & -pitch_right &
-                    +pitch_front & -pitch_back & active_z),
-        ),
-        openmc.Cell(
-            name='graphite_gap_yfront',
-            fill=water,
-            region=(+blk_left & -blk_right &
-                    +pitch_front & -blk_front & active_z),
-        ),
-        openmc.Cell(
-            name='graphite_gap_yback',
-            fill=water,
-            region=(+blk_left & -blk_right &
-                    +blk_back & -pitch_back & active_z),
-        ),
-        # Axial stack above/below the active zone. End-box mirrors the
-        # active-core element/gap grid (envelope + thin pitch gaps, added
-        # below via _endbox_gap_cells); water-beyond stays full pitch.
         openmc.Cell(
             name='graphite_upper_endbox',
             fill=end_box_homog,
@@ -973,9 +936,9 @@ def make_graphite_element():
 
     pitch_planes = (pitch_left, pitch_right, pitch_front, pitch_back)
     blk_planes   = (blk_left, blk_right, blk_front, blk_back)
-    cells.extend(_endbox_gap_cells('graphite_endbox_upper', water,
+    cells.extend(_endbox_gap_cells('graphite_endbox_upper', water_core,
         pitch_planes, blk_planes, _z_fuel_top, _z_endbox_above))
-    cells.extend(_endbox_gap_cells('graphite_endbox_lower', water,
+    cells.extend(_endbox_gap_cells('graphite_endbox_lower', water_core,
         pitch_planes, blk_planes, _z_endbox_below, _z_fuel_bot))
 
     return openmc.Universe(name='graphite_universe', cells=cells)
@@ -988,7 +951,7 @@ graphite_univ = make_graphite_element()
 # CORE LATTICE — TECDOC-643 Fig. 2.1 (LEU panel)
 # =============================================================================
 
-def build_core_geometry(withdrawn_fraction=0.0):
+def build_core_geometry(withdrawn_fraction=1.0):
     """Build the full-core openmc.Geometry for a blade WITHDRAWAL fraction f.
 
     f = 0.0 → blades fully INSERTED  (absorber spans z=[-30, +30])

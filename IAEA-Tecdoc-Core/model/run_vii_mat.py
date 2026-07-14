@@ -15,11 +15,9 @@ Units:
 """
 
 import openmc
-
-# Natural-carbon (C0, ZAID 6000) vs. explicit C12/C13 isotopic split — the
-# deck specifies natural carbon for both B4C and graphite, matching b4c's
-# C0 choice below.
-USE_NATURAL_CARBON = False
+import os
+# ENDF/B-VII.0 (MCNP ACE) has only natural carbon C0; VIII.0 needs the C12/C13 split.
+USE_NATURAL_CARBON = 'endfb70' in os.environ.get('OPENMC_CROSS_SECTIONS', '')
 
 # =============================================================================
 # FUEL MATERIAL
@@ -54,14 +52,8 @@ clad.add_element('Al', 1.00, 'ao')
 # =============================================================================
 # COOLANT / MODERATOR
 # Two water materials per MCNP deck cross-section assignments:
-#   - Outer pool water: 0.9975 g/cm³ at 294 K   (H1 = 6.66909e-2 atom/b-cm)
-#     Only the water OUTSIDE the core lattice footprint (the reflector-side
-#     boundary ring) uses this — it is not core coolant.
-#   - Core water:       0.9909 g/cm³ at 316.8 K (H1 = 6.625423e-2 atom/b-cm)
-#     Every water feature INSIDE the core (inter-element gaps, plate/channel
-#     water, end-box water, graphite channels, flux-trap holes, etc.) uses
-#     this — it is the coolant water throughout the core, not a flux-trap-
-#     specific material.
+#   - Bulk pool water:  0.9975 g/cm³ at 294 K   (H1 = 6.66909e-2 atom/b-cm)
+#   - Flux trap water:  0.9909 g/cm³ at 316.8 K (H1 = 6.625423e-2 atom/b-cm)
 # (Mass densities print ~0.02% lower than the nominal values because the
 # O-16-only basis has a slightly lower molar mass than natural oxygen; the
 # H1/O16 atom densities above are the deck-authoritative quantities.)
@@ -75,12 +67,12 @@ water.add_nuclide('O16', 6.66909e-02 / 2.0)
 water.set_density('sum')
 water.add_s_alpha_beta('c_H_in_H2O')
 
-water_core = openmc.Material(name='light_water_core_316K')
-water_core.temperature = 316.8
-water_core.add_nuclide('H1', 6.625423e-02)
-water_core.add_nuclide('O16', 6.625423e-02 / 2.0)
-water_core.set_density('sum')
-water_core.add_s_alpha_beta('c_H_in_H2O')
+water_flux_trap = openmc.Material(name='light_water_flux_trap_316K')
+water_flux_trap.temperature = 316.8
+water_flux_trap.add_nuclide('H1', 6.625423e-02)
+water_flux_trap.add_nuclide('O16', 6.625423e-02 / 2.0)
+water_flux_trap.set_density('sum')
+water_flux_trap.add_s_alpha_beta('c_H_in_H2O')
 
 # =============================================================================
 # CONTROL BLADE MATERIAL
@@ -109,18 +101,19 @@ b4c = openmc.Material(name='B4C control absorber')
 b4c.temperature = 294.0
 b4c.add_nuclide('B10', 1.914973e-02)
 b4c.add_nuclide('B11', 7.010412e-02)
-b4c.add_nuclide('C12', 2.005592e-02 * 0.9893)
-b4c.add_nuclide('C13', 2.005592e-02 * 0.0107)
-# b4c.add_nuclide('C0',  2.005592e-02)
-b4c.set_density('sum')
-
 # b4c.add_nuclide('C12', 2.005592e-02 * 0.9893)
 # b4c.add_nuclide('C13', 2.005592e-02 * 0.0107)
+if USE_NATURAL_CARBON:
+    b4c.add_nuclide('C0', 2.005592e-02)
+else:
+    b4c.add_nuclide('C12', 2.005592e-02 * 0.9893)
+    b4c.add_nuclide('C13', 2.005592e-02 * 0.0107)
+b4c.set_density('sum')
 
 # NO S(a,b) on B4C carbon (deck has no mt card for it).
 # b4c.add_nuclide('B10', 1.914973e-02)   # atom/b-cm
 # b4c.add_nuclide('B11', 7.010412e-02)
-
+# b4c.add_nuclide('C0',  2.005592e-02)
 # b4c.set_density('sum')                 # = 1.093098e-01 atom/b-cm
 
 
@@ -131,13 +124,12 @@ b4c.set_density('sum')
 # =============================================================================
 
 graphite = openmc.Material(name='graphite_reflector')
-graphite.temperature = 294.0                      # deck: $ 294.0
+graphite.set_density('g/cm3', 1.70)
+# graphite.add_element('C', 1.0, 'ao')
 if USE_NATURAL_CARBON:
-    graphite.add_nuclide('C0',  8.724000e-02)     # deck m00005, ZAID 6000
+    graphite.add_nuclide('C0', 1.0)
 else:
-    graphite.add_nuclide('C12', 8.724000e-02 * 0.9893)
-    graphite.add_nuclide('C13', 8.724000e-02 * 0.0107)
-graphite.set_density('sum')
+    graphite.add_element('C', 1.0 , 'ao')   # or your current C12/C13 lines
 graphite.add_s_alpha_beta('c_Graphite')
 
 # =============================================================================
@@ -158,32 +150,24 @@ aluminum.add_element('Al', 1.0, 'ao')
 # Density = 0.25*2.70 + 0.75*0.993 = 1.41975 g/cm³
 # =============================================================================
 
-# _vf_al  = 0.25
-# _vf_h2o = 0.75
-# _rho_al  = 2.70    # g/cm³
-# _rho_h2o = 0.993   # g/cm³ (at 38°C)
+_vf_al  = 0.25
+_vf_h2o = 0.75
+_rho_al  = 2.70    # g/cm³
+_rho_h2o = 0.993   # g/cm³ (at 38°C)
 
-# # Atom densities proportional to (v_fraction * rho) / M_mol
-# _n_al  = _vf_al  * _rho_al  / 26.982           # Al
-# _n_h   = _vf_h2o * _rho_h2o / 18.015 * 2.0    # H  (2 atoms per H₂O)
-# _n_o   = _vf_h2o * _rho_h2o / 18.015 * 1.0    # O
-# _n_tot = _n_al + _n_h + _n_o
-
-end_box_homog = openmc.Material(name='end_box_homogenized')
-end_box_homog.temperature = 316.8                      # deck m00004: $ 316.8
-end_box_homog.add_nuclide('Al27', 1.506565e-02)        # deck 13027
-end_box_homog.add_nuclide('H1',   4.969068e-02)        # deck 1001
-end_box_homog.add_nuclide('O16',  2.484534e-02)        # deck 8016
-end_box_homog.set_density('sum')                       # -> 1.41806 g/cm3
-end_box_homog.add_s_alpha_beta('c_H_in_H2O')
+# Atom densities proportional to (v_fraction * rho) / M_mol
+_n_al  = _vf_al  * _rho_al  / 26.982           # Al
+_n_h   = _vf_h2o * _rho_h2o / 18.015 * 2.0    # H  (2 atoms per H₂O)
+_n_o   = _vf_h2o * _rho_h2o / 18.015 * 1.0    # O
+_n_tot = _n_al + _n_h + _n_o
 
 # Water component is H-1 + O-16 ONLY (no H-2/O-17/O-18) per the deck.
-# end_box_homog = openmc.Material(name='end_box_homogenized')
-# end_box_homog.set_density('g/cm3', _vf_al * _rho_al + _vf_h2o * _rho_h2o)  # 1.41975
-# end_box_homog.add_nuclide('Al27', _n_al / _n_tot)
-# end_box_homog.add_nuclide('H1',   _n_h  / _n_tot)
-# end_box_homog.add_nuclide('O16',  _n_o  / _n_tot)
-# end_box_homog.add_s_alpha_beta('c_H_in_H2O')
+end_box_homog = openmc.Material(name='end_box_homogenized')
+end_box_homog.set_density('g/cm3', _vf_al * _rho_al + _vf_h2o * _rho_h2o)  # 1.41975
+end_box_homog.add_nuclide('Al27', _n_al / _n_tot)
+end_box_homog.add_nuclide('H1',   _n_h  / _n_tot)
+end_box_homog.add_nuclide('O16',  _n_o  / _n_tot)
+end_box_homog.add_s_alpha_beta('c_H_in_H2O')
 # NO S(a,b) on the aluminum component (deck has no mt card for Al).
 
 # =============================================================================
@@ -194,7 +178,7 @@ materials = openmc.Materials([
     fuel,
     clad,
     water,
-    water_core,
+    water_flux_trap,
     b4c,
     graphite,
     aluminum,
