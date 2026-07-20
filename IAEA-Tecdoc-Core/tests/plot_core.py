@@ -5,9 +5,9 @@ tests/plot_core.py
 
 The geometry here is rebuilt with the control blades FULLY INSERTED
 (withdrawn_fraction = 0.0) so the B4C absorber sits exactly in the active zone
-z = [-30, +30] with no extension above the fuel.  The production runs still use
-the module default (f = 0.4); this file only rebuilds a fresh f = 0 geometry for
-a clean plot.
+z = [-30, +30] with no extension above the fuel.  Production runs set the blade
+position through core.CoreConfig; this file only rebuilds a fresh f = 0
+geometry for a clean plot.
 
 Panel layout:
   [0,0] XY  z = 0      Full core top-down at fuel midplane (both flux traps marked).
@@ -41,19 +41,20 @@ from geometry import (
     CORE_BOTTOM, CORE_TOP,
     ENDBOX_ABOVE_TOP, ENDBOX_BELOW_BOT,
     FT_HOLE_RADIUS,
-    ELEM_Y, ACTIVE_STACK_X, ABSORBER_GAP, ABSORBER_THICK,
+    ELEM_Y, ACTIVE_STACK_X, ABSORBER_THICK,
+    CTRL_OUTER_OFFSET, CTRL_AL_PLATE_THICK, CTRL_BLADE_WATER,
     water_univ, graphite_univ, make_flux_trap,
     make_standard_fuel_element, make_control_fuel_element,
 )
 from materials import (
-    fuel, clad, water, water_flux_trap, b4c, graphite, aluminum, end_box_homog,
+    fuel, clad, water, water_core, b4c, graphite, aluminum, end_box_homog,
 )
 
 # =============================================================================
 # Rebuild geometry with control blades FULLY INSERTED (f = 0.0)
 # =============================================================================
 
-def build_geometry(f=0.0):
+def build_geometry(f=1.0):
     """Fresh OpenMC geometry for blade withdrawn_fraction f (mirrors run scripts)."""
     std_elems  = [make_standard_fuel_element(i) for i in range(23)]
     ctrl_elems = [make_control_fuel_element(100 + i, withdrawn_fraction=f)
@@ -91,7 +92,7 @@ def build_geometry(f=0.0):
     return openmc.Geometry(openmc.Universe(cells=[core_cell]))
 
 
-geometry = build_geometry(f=0.0)   # blades fully in
+geometry = build_geometry(f=0.5)   # blades fully in
 
 # =============================================================================
 # Colour map
@@ -100,8 +101,8 @@ geometry = build_geometry(f=0.0)   # blades fully in
 COLORS = {
     fuel:            (210,  55,  55),   # red          — U₃Si₂-Al fuel meat
     clad:            (200, 200, 200),   # light gray   — Al cladding
-    water:           ( 85, 175, 235),   # sky blue     — bulk water 294 K
-    water_flux_trap: ( 11,  34, 117),   # deep navy    — flux trap water 316.8 K
+    water:           ( 85, 175, 235),   # sky blue     — outer pool water 294 K
+    water_core:      ( 11,  34, 117),   # deep navy    — core coolant water 316.8 K
     graphite:        ( 65,  65,  65),   # dark gray    — graphite reflector
     aluminum:        (165, 165, 200),   # silver-blue  — structural Al
     b4c:             ( 25, 120,  55),   # dark green   — B₄C absorber blade
@@ -131,9 +132,11 @@ FT2_Y = -2.0 * PITCH_Y    # ≈ -16.2 cm
 # Control element C2 — lattice universes[4][2], centre (x, y)
 C2_X = -1.5 * PITCH_X     # ≈ -11.55 cm
 C2_Y =  0.0               # cm  (row 4 centre)
-# XZ through the blade: slice at the bottom Hf-slot y (relative to the element
-# centre) so the B4C absorber band is captured in the constant-y plane.
-C2_BLADE_Y = C2_Y + (-ELEM_Y / 2.0 + ABSORBER_GAP + ABSORBER_THICK / 2.0)  # ≈ -3.45
+# XZ through the blade: slice at the bottom B4C-slot y (relative to the
+# element centre) so the absorber band is captured in the constant-y plane.
+# Wall -> fuel: offset water | outer guide | blade water | [B4C slot, here].
+C2_BLADE_Y = C2_Y + (-ELEM_Y / 2.0 + CTRL_OUTER_OFFSET + CTRL_AL_PLATE_THICK
+                     + CTRL_BLADE_WATER + ABSORBER_THICK / 2.0)  # ≈ -3.5003
 
 # Blade z-extent at f = 0 (fully inserted)
 BLADE_Z_BOT = -HALF_Z                 # -30 cm
