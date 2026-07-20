@@ -75,3 +75,47 @@ The two water channels are **asymmetric** (0.268 vs 0.243) because the absorber 
 3. **Standard element heterogeneous y-envelope = 8.00 cm, but all "Model for…" diagrams show 8.10 cm** (= y-pitch): the models again absorb the inter-element gap into the model region.
 
 **OpenMC geometry call (Part B):** the physical element dimensions from Table 1 (76 × 80 mm envelope, 0.48 cm Al side plates, 6.64 cm interior) are used for the heterogeneous OpenMC model for **both** standard and control elements. The 6.60/0.55 and 6.30/0.70 values in Fig. 2 are diffusion-code homogenized representations only; they are not implemented in the Monte Carlo model. The control element x-envelope is 7.60 cm (leaving the same 0.05 cm water gap to the pitch boundary as the standard element).
+
+---
+
+## As-implemented control-element end block (current `geometry.py`)
+
+The literal Fig.2 guide-region reading above (1.075 cm, asymmetric 0.268/0.243 cm
+water channels from a 0.395 cm absorber offset) is **not** what the OpenMC model
+implements. Starting with commit `65fb194` ("Rework control-element end blocks:
+standard follower pitch, feeder channel, symmetric blade water, outer guide
+offset") and finalized in the 2026-07-20 meeting, the end block instead uses a
+symmetric layout built outward from the 17-plate follower stack, with the
+blade-flanking water gap as the free residual:
+
+```
+[feeder channel 0.219 | Al guide 0.127 | blade water 0.139 | absorber 0.310 |
+ blade water 0.139 | Al guide 0.127 | outer offset 0.1075] = 1.1685 cm
+```
+
+| Constant | Value (cm) | Provenance |
+|----------|-----------|------------|
+| `CTRL_AL_PLATE_THICK` | 0.127 | [TECDOC] Table 1 "1.27 mm"; reverted 2026-07-20 from a 0.15 cm Argonne TH-analysis convenience |
+| `CTRL_FEEDER_CHANNEL` | 0.219 | Standard fuel-to-fuel water channel (`WATER_CHAN_THICK`) — same width as every plate-to-plate channel in the follower stack |
+| `CTRL_OUTER_OFFSET` | 0.1075 | [DERIVED] = `STD_END_WATER`, the standard element's own last-plate-to-envelope water gap |
+| `CTRL_BLADE_WATER` | 0.139 | Computed residual (symmetric both sides of the blade): `(1.1685 − 0.219 − 2×0.127 − 0.310 − 0.1075) / 2` |
+| `CTRL_END_BLOCK` (total, each end) | 1.1685 | = `ELEM_Y/2 − CTRL_FUEL_STACK_HALF` = 4.0 − 2.8315 |
+
+This total (1.1685 cm) differs from the Fig.2-derived guide-region depth
+(1.075 cm) above — the discrepancy is an open reconciliation item between the
+literal figure annotation and the as-built follower-stack-driven model; it has
+not been resolved as of this writing.
+
+Two related 2026-07-20 meeting decisions, in `materials.py` (not a dimension
+table entry, noted here for provenance tracking):
+- Graphite reflector density set to **1.7000 g/cm³** [TECDOC] (replaces the
+  deck-implied ~1.740 g/cm³ atom-density spec).
+- Al-27 thermal scattering (`c_Al27` S(a,b)) enabled (`USE_AL_SAB = True`) on
+  clad, structural aluminum, and `end_box_homog`, gated on the active
+  cross-section library providing `c_Al27` (ENDF/B-VIII.0 does; VII.0 does not).
+
+Also per the 2026-07-20 meeting: the control blade's B4C absorber now carries a
+15 cm homogenized (`end_box_homog`) end-box cap rigidly attached to its top
+face, translating with the blade and clipped at `CORE_TOP`; not a dimension
+change, but it changes what fills the slot above the blade at intermediate
+withdrawal fractions (previously fixed end-box/water bands).

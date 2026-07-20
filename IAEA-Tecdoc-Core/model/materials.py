@@ -21,6 +21,12 @@ import openmc
 # C0 choice below.
 USE_NATURAL_CARBON = False
 
+# Al metal thermal scattering S(a,b) (c_Al27). Enabled per the 2026-07-20
+# meeting decision ("We will add Al-27 SaB libraries"). The active
+# ENDF/B-VIII.0 library ($OPENMC_CROSS_SECTIONS) provides c_Al27; ENDF/B-VII.0
+# does not, so this must revert to False if the library is switched back.
+USE_AL_SAB = True
+
 # =============================================================================
 # FUEL MATERIAL
 # LEU U3Si2-Al fuel, 19.75 w/o enriched uranium
@@ -48,8 +54,10 @@ clad.set_density('g/cm3', 2.70)
 clad.add_element('Al', 1.00, 'ao')
 # Pure aluminum stands in for 6061-T6; the minor alloying elements (Mg, Si, Cu,
 # Cr, Zn, Ti, Fe — ~2.7 w/o total) have negligible reactivity effect here.
-# NO S(a,b) on cladding aluminum (deck has no mt card for Al):
-# clad.add_s_alpha_beta('c_Al27')
+# Al metal S(a,b) (c_Al27) added per the 2026-07-20 meeting decision, gated on
+# USE_AL_SAB (ENDF/B-VIII.0 provides c_Al27; VII.0 does not).
+if USE_AL_SAB:
+    clad.add_s_alpha_beta('c_Al27')
 
 # =============================================================================
 # COOLANT / MODERATOR
@@ -126,18 +134,19 @@ b4c.set_density('sum')
 
 # =============================================================================
 # REFLECTOR MATERIAL
-# Graphite reflector blocks surrounding the core
-# Density: 1.70 g/cm3
+# Graphite reflector blocks surrounding the core.
+# Density: [TECDOC] 1.7000 g/cm3 per the 2026-07-20 meeting decision (replaces
+# the deck-implied ~1.740 g/cm3 that the prior atom-density spec produced).
 # =============================================================================
 
 graphite = openmc.Material(name='graphite_reflector')
 graphite.temperature = 294.0                      # deck: $ 294.0
 if USE_NATURAL_CARBON:
-    graphite.add_nuclide('C0',  8.724000e-02)     # deck m00005, ZAID 6000
+    graphite.add_nuclide('C0', 1.0)
 else:
-    graphite.add_nuclide('C12', 8.724000e-02 * 0.9893)
-    graphite.add_nuclide('C13', 8.724000e-02 * 0.0107)
-graphite.set_density('sum')
+    graphite.add_nuclide('C12', 0.9893)
+    graphite.add_nuclide('C13', 0.0107)
+graphite.set_density('g/cm3', 1.7000)
 graphite.add_s_alpha_beta('c_Graphite')
 
 # =============================================================================
@@ -149,7 +158,10 @@ graphite.add_s_alpha_beta('c_Graphite')
 aluminum = openmc.Material(name='aluminum_structure')
 aluminum.set_density('g/cm3', 2.70)
 aluminum.add_element('Al', 1.0, 'ao')
-# NO S(a,b) on structural aluminum (deck has no mt card for Al).
+# Al metal S(a,b) (c_Al27) added per the 2026-07-20 meeting decision, gated on
+# USE_AL_SAB.
+if USE_AL_SAB:
+    aluminum.add_s_alpha_beta('c_Al27')
 
 # =============================================================================
 # END-BOX HOMOGENIZED MATERIAL
@@ -176,6 +188,10 @@ end_box_homog.add_nuclide('H1',   4.969068e-02)        # deck 1001
 end_box_homog.add_nuclide('O16',  2.484534e-02)        # deck 8016
 end_box_homog.set_density('sum')                       # -> 1.41806 g/cm3
 end_box_homog.add_s_alpha_beta('c_H_in_H2O')
+# Al metal S(a,b) (c_Al27) on the aluminum component, added per the 2026-07-20
+# meeting decision, gated on USE_AL_SAB.
+if USE_AL_SAB:
+    end_box_homog.add_s_alpha_beta('c_Al27')
 
 # Water component is H-1 + O-16 ONLY (no H-2/O-17/O-18) per the deck.
 # end_box_homog = openmc.Material(name='end_box_homogenized')
@@ -184,7 +200,8 @@ end_box_homog.add_s_alpha_beta('c_H_in_H2O')
 # end_box_homog.add_nuclide('H1',   _n_h  / _n_tot)
 # end_box_homog.add_nuclide('O16',  _n_o  / _n_tot)
 # end_box_homog.add_s_alpha_beta('c_H_in_H2O')
-# NO S(a,b) on the aluminum component (deck has no mt card for Al).
+# Al metal S(a,b) on the aluminum component now added (gated on USE_AL_SAB),
+# per the 2026-07-20 meeting decision.
 
 # =============================================================================
 # Collect all materials into a Materials object for export

@@ -31,11 +31,14 @@ Control blade model — fixed-length sliding absorber:
     withdrawn_fraction f in [0, 1]:
         z_bot = -30 + f * 60   → f=0: -30,  f=1: +30
         z_top = z_bot + 60     → f=0: +30,  f=1: +90 (= CORE_TOP at f=1)
-    b4c fills the Hf-slot x/y band for z in [z_bot, z_top]; the region above
-    z_top in that band is region-appropriate material (end_box_homog in
-    [+30,+45], water in [+45, CORE_TOP]) rather than a permanently reserved
-    water channel. At f=1 that above-blade complement is zero-measure
-    (z_top == CORE_TOP): no cap.
+    b4c fills the Hf-slot x/y band for z in [z_bot, z_top]. A 15 cm homogenized
+    (end_box_homog) end-box cap is RIGIDLY ATTACHED to the top of the blade and
+    translates with it, occupying the blade's own slot footprint over
+    z=[z_top, min(z_top+15, CORE_TOP)]; above the cap the slot is water up to
+    CORE_TOP. At f=0 the cap sits at [+30,+45], coplanar with the surrounding
+    end-boxes. At f=1 the blade top coincides with CORE_TOP (z_top == +90), so
+    the cap is pushed entirely out of the model and is NOT created — the blade
+    itself fills the slot to the top, exactly as before.
     All other cells (guide plates, fuel, channels, etc.) are restricted
     to the active zone z=[-30, +30]; end-box/water cells cover z outside.
 
@@ -100,6 +103,14 @@ N_PLATES_STD  = 23
 N_PLATES_CTRL = 17
 
 WATER_CHAN_THICK = 0.219     # cm  (2.19 mm)
+
+# Standard element plate-stack height and the residual end water gap between
+# the outermost plate face and the element envelope edge. [DERIVED]
+STD_STACK_HEIGHT = (2 * PLATE_THICK_OUTER
+                    + (N_PLATES_STD - 2) * PLATE_THICK_INNER
+                    + (N_PLATES_STD - 1) * WATER_CHAN_THICK)   # 7.785 cm
+STD_END_WATER = (ELEM_Y - STD_STACK_HEIGHT) / 2.0             # 0.1075 cm  [DERIVED]
+assert STD_END_WATER > 0, "standard element end water gap must be positive"
 
 # Flux trap cylindrical water hole radius.
 # ASSUMED 2.5 cm (inscribed radius of the 50 mm square hole).
@@ -218,6 +229,9 @@ def make_standard_fuel_element(elem_id):
     )
 
     stack_height_y = sum(plate_thicks) + (N_PLATES_STD - 1) * WATER_CHAN_THICK
+    # Tie the built stack to the module-level derived end-water gap.
+    assert abs((ELEM_Y - stack_height_y) / 2.0 - STD_END_WATER) < 1e-9, \
+        "standard stack end water gap disagrees with STD_END_WATER"
     y = -stack_height_y / 2.0
     stack_bottom_surf = openmc.YPlane(y0=y)
 
@@ -440,7 +454,8 @@ ABSORBER_THICK  = 0.31
 
 CTRL_FUEL_WIDTH_X   = ACTIVE_STACK_X
 CTRL_SIDE_PLATE_X   = SIDE_PLATE_THICK
-CTRL_AL_PLATE_THICK = .15
+CTRL_AL_PLATE_THICK = 0.127   # cm (1.27 mm) [TECDOC] — was 0.15 (an Argonne
+                              # TH-analysis convenience); reverted 2026-07-20.
 CTRL_HF_THICK       = ABSORBER_THICK
 
 N_CTRL_FUEL_PLATES  = 17
@@ -450,11 +465,14 @@ CTRL_PLATE_PITCH    = PLATE_THICK_INNER + WATER_CHAN_THICK   # 0.346 cm
 CTRL_FUEL_STACK_HALF = (N_CTRL_FUEL_PLATES * PLATE_THICK_INNER
                         + (N_CTRL_FUEL_PLATES - 1) * WATER_CHAN_THICK) / 2.0  # 2.8315 cm
 
-CTRL_FEEDER_CHANNEL = WATER_CHAN_THICK   # 0.219 cm — same as a fuel-fuel channel
+# Feeder channel: the follower's outermost fuel plate to the inner guide
+# plate is a standard fuel-to-fuel water channel, same width as every
+# plate-to-plate channel in the stack above it.
+CTRL_FEEDER_CHANNEL = WATER_CHAN_THICK   # 0.219 cm [DERIVED — standard channel]
 
-# PLACEHOLDER — CONFIRM VS DECK. Small inward offset of the outer guide/slider
-# from the element wall (currently no deck value available).
-CTRL_OUTER_OFFSET = 0.05   # cm
+# Gap between the outer guide plate and the element wall, likewise set to the
+# standard-element end gap.
+CTRL_OUTER_OFFSET = STD_END_WATER   # 0.1075 cm [DERIVED, 2026-07-20 meeting]
 
 # End-block budget: everything between the fuel stack edge and the wall.
 CTRL_END_BLOCK = ELEM_Y / 2.0 - CTRL_FUEL_STACK_HALF   # 1.1685 cm
@@ -464,7 +482,9 @@ CTRL_END_BLOCK = ELEM_Y / 2.0 - CTRL_FUEL_STACK_HALF   # 1.1685 cm
 # changes.
 CTRL_BLADE_WATER = (CTRL_END_BLOCK - CTRL_FEEDER_CHANNEL
                     - 2.0 * CTRL_AL_PLATE_THICK - ABSORBER_THICK
-                    - CTRL_OUTER_OFFSET) / 2.0   # 0.14475 cm
+                    - CTRL_OUTER_OFFSET) / 2.0
+# With the 2026-07-20 values this evaluates to exactly:
+#   (1.1685 - 0.219 - 2*0.127 - 0.31 - 0.1075) / 2 = 0.139 cm
 
 assert CTRL_BLADE_WATER >= 0.05, (
     f"CTRL_BLADE_WATER={CTRL_BLADE_WATER:.5f} cm is degenerate for "
@@ -647,26 +667,36 @@ def make_control_fuel_element(elem_id, withdrawn_fraction=0.0):
         name=f'ctrl{elem_id}_slot_t_water_active', fill=water_core,
         region=hf_slot_t & +_z_fuel_bot & -blade_z_bot))
 
-    # Upper end-box / upper-water complements to the blade, in the Hf-slot
-    # x/y band: region-appropriate material (homo in [+30,+45], water in
-    # [+45, CORE_TOP]) wherever the blade has not yet reached, instead of a
-    # permanently reserved water channel. At f=1, blade_z_top == CORE_TOP, so
-    # the water-region complement below is zero-measure — that IS the "no
-    # cap above the withdrawn blade" result, not a cell to delete.
+    # Moving homogenized end-box cap, rigidly attached to the blade top. A
+    # 15 cm end_box_homog cap rides on top of the blade in the Hf-slot x/y
+    # band, translating with it and clipped at CORE_TOP; above the cap the slot
+    # is water (294 K) up to CORE_TOP. At f=0 the cap occupies [+30,+45],
+    # coplanar with the surrounding end-boxes. At f=1 the blade top coincides
+    # with CORE_TOP, so the cap is pushed entirely out of the model and is not
+    # created at all — the blade fills the slot to the top.
     # No lower-side counterpart is needed: blade_z_bot is always >= -HALF_Z
     # (asserted above), so the blade never reaches the lower end-box/water.
-    cells.append(openmc.Cell(
-        name=f'ctrl{elem_id}_upper_endbox_slot_b', fill=end_box_homog,
-        region=hf_slot_b & +_z_fuel_top & -_z_endbox_above & +blade_z_top))
-    cells.append(openmc.Cell(
-        name=f'ctrl{elem_id}_upper_endbox_slot_t', fill=end_box_homog,
-        region=hf_slot_t & +_z_fuel_top & -_z_endbox_above & +blade_z_top))
-    cells.append(openmc.Cell(
-        name=f'ctrl{elem_id}_upper_water_slot_b', fill=water,
-        region=hf_slot_b & +_z_endbox_above & -_z_model_top & +blade_z_top))
-    cells.append(openmc.Cell(
-        name=f'ctrl{elem_id}_upper_water_slot_t', fill=water,
-        region=hf_slot_t & +_z_endbox_above & -_z_model_top & +blade_z_top))
+    if z_top < CORE_TOP:
+        # Cap top is always >= +45 (z_top >= HALF_Z = +30, asserted above), so
+        # the water above the cap never encroaches on the end-box band
+        # [+30,+45].
+        assert z_top + 15.0 >= ENDBOX_ABOVE_TOP, (
+            f"ctrl{elem_id}: cap top {z_top + 15.0:.2f} < ENDBOX_ABOVE_TOP "
+            f"{ENDBOX_ABOVE_TOP} — cap would not clear the end-box band")
+        blade_cap_top = openmc.ZPlane(z0=min(z_top + 15.0, CORE_TOP))
+        cells.append(openmc.Cell(
+            name=f'ctrl{elem_id}_blade_cap_slot_b', fill=end_box_homog,
+            region=hf_slot_b & +blade_z_top & -blade_cap_top))
+        cells.append(openmc.Cell(
+            name=f'ctrl{elem_id}_blade_cap_slot_t', fill=end_box_homog,
+            region=hf_slot_t & +blade_z_top & -blade_cap_top))
+        if blade_cap_top.z0 < CORE_TOP:
+            cells.append(openmc.Cell(
+                name=f'ctrl{elem_id}_water_above_cap_slot_b', fill=water,
+                region=hf_slot_b & +blade_cap_top & -_z_model_top))
+            cells.append(openmc.Cell(
+                name=f'ctrl{elem_id}_water_above_cap_slot_t', fill=water,
+                region=hf_slot_t & +blade_cap_top & -_z_model_top))
 
     # ── 17-plate fuel follower (active zone only) ───────────────────────────
 
@@ -892,6 +922,10 @@ water_univ = openmc.Universe(name='water_universe', cells=[water_cell])
 # reflector height matches the core height.
 def make_graphite_element():
     """Graphite reflector element: continuous wall in-plane, gapped end-box axially."""
+    # TODO (2026-07-20 meeting): add small water channels BETWEEN graphite
+    # blocks. Dimension is pending — it must come FROM THE MCNP MODEL; do not
+    # invent a channel width. Until then the reflector remains a continuous
+    # in-plane wall (no inter-block gap).
     pitch_left  = openmc.XPlane(x0=-PITCH_X / 2.0)
     pitch_right = openmc.XPlane(x0= PITCH_X / 2.0)
     pitch_front = openmc.YPlane(y0=-PITCH_Y / 2.0)
