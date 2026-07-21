@@ -35,6 +35,7 @@ USE_AL_SAB = True
 # =============================================================================
 
 fuel = openmc.Material(name='LEU_U3Si2_Al_fuel')
+fuel.temperature = 332.1
 fuel.add_nuclide('U235', 2.251800e-03)   # atom/b-cm
 fuel.add_nuclide('U238', 9.034100e-03)
 fuel.add_nuclide('Al27', 3.256300e-02)
@@ -50,6 +51,7 @@ fuel.set_density('sum')
 # =============================================================================
 
 clad = openmc.Material(name='Al_6061_cladding')
+clad.temperature = 330.7 
 clad.set_density('g/cm3', 2.70)
 clad.add_element('Al', 1.00, 'ao')
 # Pure aluminum stands in for 6061-T6; the minor alloying elements (Mg, Si, Cu,
@@ -156,6 +158,7 @@ graphite.add_s_alpha_beta('c_Graphite')
 # =============================================================================
 
 aluminum = openmc.Material(name='aluminum_structure')
+aluminum.temperature = 330.7
 aluminum.set_density('g/cm3', 2.70)
 aluminum.add_element('Al', 1.0, 'ao')
 # Al metal S(a,b) (c_Al27) added per the 2026-07-20 meeting decision, gated on
