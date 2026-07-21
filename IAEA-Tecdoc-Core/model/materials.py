@@ -148,7 +148,7 @@ if USE_NATURAL_CARBON:
 else:
     graphite.add_nuclide('C12', 0.9893)
     graphite.add_nuclide('C13', 0.0107)
-graphite.set_density('g/cm3', 1.7000)
+graphite.set_density('g/cm3', 1.7400)
 graphite.add_s_alpha_beta('c_Graphite')
 
 # =============================================================================
