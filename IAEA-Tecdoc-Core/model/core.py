@@ -49,7 +49,7 @@ class CoreConfig:
     """All run knobs in one place. CLI overrides via main()."""
     # Blade position — intuitive sense: 0 = fully withdrawn, 100 = fully
     # inserted. See module docstring for the conversion to withdrawal fraction.
-    blade_insertion_percent: float = 0.0
+    blade_insertion_percent: float = 100.0
 
     # Eigenvalue run statistics
     particles: int = 50000

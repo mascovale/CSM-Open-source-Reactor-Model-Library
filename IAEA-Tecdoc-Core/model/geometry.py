@@ -154,30 +154,6 @@ _z_model_top    = openmc.ZPlane(z0=CORE_TOP)           # +90.0 cm
 _z_model_bot    = openmc.ZPlane(z0=CORE_BOTTOM)        # −90.0 cm
 
 
-# =============================================================================
-# END-BOX INTER-ELEMENT GAP HELPER
-# Segments the homogenized end-box in x-y using the SAME pitch/envelope
-# planes (and therefore the same gap width) as the active-zone gap cells, so
-# the end-box plane mirrors the active-core element/gap grid. Takes only
-# already-built plane objects from the calling function — builds none.
-# =============================================================================
-
-def _endbox_gap_cells(name_prefix, fill_mat, pitch_planes, envelope_planes, z_lo, z_hi):
-    """4 water sliver cells (xleft/xright/yfront/yback) between envelope and
-    pitch, restricted to [z_lo, z_hi]."""
-    pitch_left, pitch_right, pitch_front, pitch_back = pitch_planes
-    env_left, env_right, env_front, env_back = envelope_planes
-    return [
-        openmc.Cell(name=f'{name_prefix}_gap_xleft', fill=fill_mat,
-            region=(+pitch_left & -env_left & +pitch_front & -pitch_back & +z_lo & -z_hi)),
-        openmc.Cell(name=f'{name_prefix}_gap_xright', fill=fill_mat,
-            region=(+env_right & -pitch_right & +pitch_front & -pitch_back & +z_lo & -z_hi)),
-        openmc.Cell(name=f'{name_prefix}_gap_yfront', fill=fill_mat,
-            region=(+env_left & -env_right & +pitch_front & -env_front & +z_lo & -z_hi)),
-        openmc.Cell(name=f'{name_prefix}_gap_yback', fill=fill_mat,
-            region=(+env_left & -env_right & +env_back & -pitch_back & +z_lo & -z_hi)),
-    ]
-
 
 # =============================================================================
 # STANDARD FUEL ELEMENT
@@ -376,18 +352,15 @@ def make_standard_fuel_element(elem_id):
     ))
 
     # ── Axial regions above/below the active fuel ──────────────────────────
-    # End-box footprint mirrors the active-core element/gap grid: envelope
-    # block (same box_left/right/front/back as the active zone) + thin pitch
-    # gaps (same pitch_left/right/front/back), via _endbox_gap_cells, just
-    # restricted to the end-box z-band instead of active_z. Water-beyond
-    # regions stay full pitch (uniform water, no grid needed).
+    # End-box is one solid full-pitch homogenized block — no inter-element
+    # water gap subdivision (the end-box material is already a homogenized
+    # Al/water mixture, so a physical gap slice within it is not meaningful).
     full_pitch = +pitch_left & -pitch_right & +pitch_front & -pitch_back
-    envelope   = +box_left & -box_right & +box_front & -box_back
 
     cells.append(openmc.Cell(
         name=f'std{elem_id}_upper_endbox',
         fill=end_box_homog,
-        region=envelope & +_z_fuel_top & -_z_endbox_above
+        region=full_pitch & +_z_fuel_top & -_z_endbox_above
     ))
     cells.append(openmc.Cell(
         name=f'std{elem_id}_upper_water',
@@ -397,20 +370,13 @@ def make_standard_fuel_element(elem_id):
     cells.append(openmc.Cell(
         name=f'std{elem_id}_lower_endbox',
         fill=end_box_homog,
-        region=envelope & +_z_endbox_below & -_z_fuel_bot
+        region=full_pitch & +_z_endbox_below & -_z_fuel_bot
     ))
     cells.append(openmc.Cell(
         name=f'std{elem_id}_lower_water',
         fill=water,
         region=full_pitch & +_z_model_bot & -_z_endbox_below
     ))
-
-    pitch_planes = (pitch_left, pitch_right, pitch_front, pitch_back)
-    box_planes   = (box_left, box_right, box_front, box_back)
-    cells.extend(_endbox_gap_cells(f'std{elem_id}_endbox_upper', water_core,
-        pitch_planes, box_planes, _z_fuel_top, _z_endbox_above))
-    cells.extend(_endbox_gap_cells(f'std{elem_id}_endbox_lower', water_core,
-        pitch_planes, box_planes, _z_endbox_below, _z_fuel_bot))
 
     return openmc.Universe(name=f'std_fuel_elem_{elem_id}', cells=cells)
 
@@ -778,32 +744,25 @@ def make_control_fuel_element(elem_id, withdrawn_fraction=0.0):
     # Upper end-box/water still exclude the Hf-slot footprint (handled above,
     # since the blade can reach into them). Lower end-box/water need NO such
     # exclusion: the blade never enters z<-HALF_Z (asserted above), so that
-    # band is uniform material straight through — no reserved gap. End-box
-    # footprint mirrors the active-core element/gap grid (envelope + thin
-    # pitch gaps via _endbox_gap_cells); water-beyond stays full pitch.
+    # band is uniform material straight through — no reserved gap. End-box is
+    # one solid full-pitch homogenized block — no inter-element water gap
+    # subdivision (the end-box material is already a homogenized Al/water
+    # mixture, so a physical gap slice within it is not meaningful).
     full_pitch   = +pitch_left & -pitch_right & +pitch_front & -pitch_back
-    envelope     = +elem_left & -elem_right & +elem_front & -elem_back
     not_hf_slots = ~hf_slot_b & ~hf_slot_t   # complement of both Hf slot footprints
 
     cells.append(openmc.Cell(
         name=f'ctrl{elem_id}_upper_endbox', fill=end_box_homog,
-        region=envelope & +_z_fuel_top & -_z_endbox_above & not_hf_slots))
+        region=full_pitch & +_z_fuel_top & -_z_endbox_above & not_hf_slots))
     cells.append(openmc.Cell(
         name=f'ctrl{elem_id}_upper_water', fill=water,
         region=full_pitch & +_z_endbox_above & -_z_model_top & not_hf_slots))
     cells.append(openmc.Cell(
         name=f'ctrl{elem_id}_lower_endbox', fill=end_box_homog,
-        region=envelope & +_z_endbox_below & -_z_fuel_bot))
+        region=full_pitch & +_z_endbox_below & -_z_fuel_bot))
     cells.append(openmc.Cell(
         name=f'ctrl{elem_id}_lower_water', fill=water,
         region=full_pitch & +_z_model_bot & -_z_endbox_below))
-
-    pitch_planes = (pitch_left, pitch_right, pitch_front, pitch_back)
-    elem_planes  = (elem_left, elem_right, elem_front, elem_back)
-    cells.extend(_endbox_gap_cells(f'ctrl{elem_id}_endbox_upper', water_core,
-        pitch_planes, elem_planes, _z_fuel_top, _z_endbox_above))
-    cells.extend(_endbox_gap_cells(f'ctrl{elem_id}_endbox_lower', water_core,
-        pitch_planes, elem_planes, _z_endbox_below, _z_fuel_bot))
 
     return openmc.Universe(name=f'ctrl_fuel_elem_{elem_id}', cells=cells)
 
@@ -822,10 +781,7 @@ def make_flux_trap():
     The aluminum block itself fills the FULL lattice pitch (PITCH_X x
     PITCH_Y = 7.7 x 8.1 cm) — there is no inter-element water gap around the
     active-zone block. The axial end-box (homogenized water/Al) region above
-    and below, however, keeps the SAME ELEM_X x ELEM_Y envelope/pitch grid as
-    the fuel and graphite elements — i.e. the core-element separation
-    channels continue through the end-box region here too, using core
-    coolant water (water_core) rather than the old bulk-water gap fill.
+    and below is likewise one solid full-pitch block — no gap subdivision.
 
     Cylinder: radius FT_HOLE_RADIUS = 2.5 cm, centered at element origin (x=0, y=0).
     The cylinder is axially unbounded within the active zone (active_z clips it).
@@ -860,16 +816,17 @@ def make_flux_trap():
         region=(+pitch_left & -pitch_right & +pitch_front & -pitch_back & +hole_cyl & active_z)
     ))
 
-    # Axial regions above/below active fuel. End-box mirrors the active-core
-    # element/gap grid (envelope + thin pitch gaps via _endbox_gap_cells,
-    # filled with core coolant water); water-beyond stays full pitch.
+    # Axial regions above/below active fuel. End-box is one solid full-pitch
+    # homogenized block — no inter-element water gap subdivision (the
+    # end-box material is already a homogenized Al/water mixture, so a
+    # physical gap slice within it is not meaningful); water-beyond stays
+    # full pitch.
     full_pitch = +pitch_left & -pitch_right & +pitch_front & -pitch_back
-    envelope   = +elem_left & -elem_right & +elem_front & -elem_back
 
     cells.append(openmc.Cell(
         name='flux_trap_upper_endbox',
         fill=end_box_homog,
-        region=envelope & +_z_fuel_top & -_z_endbox_above
+        region=full_pitch & +_z_fuel_top & -_z_endbox_above
     ))
     cells.append(openmc.Cell(
         name='flux_trap_upper_water',
@@ -879,20 +836,13 @@ def make_flux_trap():
     cells.append(openmc.Cell(
         name='flux_trap_lower_endbox',
         fill=end_box_homog,
-        region=envelope & +_z_endbox_below & -_z_fuel_bot
+        region=full_pitch & +_z_endbox_below & -_z_fuel_bot
     ))
     cells.append(openmc.Cell(
         name='flux_trap_lower_water',
         fill=water,
         region=full_pitch & +_z_model_bot & -_z_endbox_below
     ))
-
-    pitch_planes = (pitch_left, pitch_right, pitch_front, pitch_back)
-    elem_planes  = (elem_left, elem_right, elem_front, elem_back)
-    cells.extend(_endbox_gap_cells('flux_trap_endbox_upper', water_core,
-        pitch_planes, elem_planes, _z_fuel_top, _z_endbox_above))
-    cells.extend(_endbox_gap_cells('flux_trap_endbox_lower', water_core,
-        pitch_planes, elem_planes, _z_endbox_below, _z_fuel_bot))
 
     return openmc.Universe(name='flux_trap_universe', cells=cells)
 
@@ -914,14 +864,12 @@ water_univ = openmc.Universe(name='water_universe', cells=[water_cell])
 # continuous graphite wall.
 #
 # Axially: graphite occupies only the active fuel z-range [-30, +30]. Above
-# and below, the end-box (homogenized water/Al) region keeps the SAME
-# envelope/pitch grid as the fuel elements — i.e. the core-element gaps
-# continue through the end-box region for each reflector position, even
-# though the graphite wall above/below them is continuous. Water-beyond
-# stays full pitch, mirroring the fuel element end-box + water stack so the
-# reflector height matches the core height.
+# and below, the end-box (homogenized water/Al) region is one solid
+# full-pitch block, same as the fuel elements — no gap subdivision.
+# Water-beyond stays full pitch, mirroring the fuel element end-box + water
+# stack so the reflector height matches the core height.
 def make_graphite_element():
-    """Graphite reflector element: continuous wall in-plane, gapped end-box axially."""
+    """Graphite reflector element: continuous wall in-plane, solid end-box axially."""
     # TODO (2026-07-20 meeting): add small water channels BETWEEN graphite
     # blocks. Dimension is pending — it must come FROM THE MCNP MODEL; do not
     # invent a channel width. Until then the reflector remains a continuous
@@ -931,15 +879,12 @@ def make_graphite_element():
     pitch_front = openmc.YPlane(y0=-PITCH_Y / 2.0)
     pitch_back  = openmc.YPlane(y0= PITCH_Y / 2.0)
 
-    blk_left  = openmc.XPlane(x0=-ELEM_X / 2.0)
-    blk_right = openmc.XPlane(x0= ELEM_X / 2.0)
-    blk_front = openmc.YPlane(y0=-ELEM_Y / 2.0)
-    blk_back  = openmc.YPlane(y0= ELEM_Y / 2.0)
-
     active_z   = +_z_fuel_bot & -_z_fuel_top
     full_pitch = +pitch_left & -pitch_right & +pitch_front & -pitch_back
-    envelope   = +blk_left & -blk_right & +blk_front & -blk_back
 
+    # End-box is one solid full-pitch homogenized block — no inter-element
+    # water gap subdivision (the end-box material is already a homogenized
+    # Al/water mixture, so a physical gap slice within it is not meaningful).
     cells = [
         openmc.Cell(
             name='graphite_block',
@@ -949,7 +894,7 @@ def make_graphite_element():
         openmc.Cell(
             name='graphite_upper_endbox',
             fill=end_box_homog,
-            region=envelope & +_z_fuel_top & -_z_endbox_above,   # +30 → +45 cm
+            region=full_pitch & +_z_fuel_top & -_z_endbox_above,   # +30 → +45 cm
         ),
         openmc.Cell(
             name='graphite_upper_water',
@@ -959,7 +904,7 @@ def make_graphite_element():
         openmc.Cell(
             name='graphite_lower_endbox',
             fill=end_box_homog,
-            region=envelope & +_z_endbox_below & -_z_fuel_bot,   # −45 → −30 cm
+            region=full_pitch & +_z_endbox_below & -_z_fuel_bot,   # −45 → −30 cm
         ),
         openmc.Cell(
             name='graphite_lower_water',
@@ -967,13 +912,6 @@ def make_graphite_element():
             region=full_pitch & +_z_model_bot & -_z_endbox_below,  # −90 → −45 cm
         ),
     ]
-
-    pitch_planes = (pitch_left, pitch_right, pitch_front, pitch_back)
-    blk_planes   = (blk_left, blk_right, blk_front, blk_back)
-    cells.extend(_endbox_gap_cells('graphite_endbox_upper', water_core,
-        pitch_planes, blk_planes, _z_fuel_top, _z_endbox_above))
-    cells.extend(_endbox_gap_cells('graphite_endbox_lower', water_core,
-        pitch_planes, blk_planes, _z_endbox_below, _z_fuel_bot))
 
     return openmc.Universe(name='graphite_universe', cells=cells)
 
@@ -1062,9 +1000,9 @@ if __name__ == '__main__':
     print(f"End-box above:        [{+HALF_Z}, {ENDBOX_ABOVE_TOP}] cm")
     print(f"End-box below:        [{ENDBOX_BELOW_BOT}, {-HALF_Z}] cm")
     print(f"Core z-bounds:        [{CORE_BOTTOM}, {CORE_TOP}] cm (vacuum)")
-    print(f"End-box gap width:    GAP_X={GAP_X:.4f} cm, GAP_Y={GAP_Y:.4f} cm "
-          f"(same pitch/envelope surfaces reused for active-zone and "
-          f"end-box gap cells — no separate value possible)")
+    print(f"Active-zone gap width: GAP_X={GAP_X:.4f} cm, GAP_Y={GAP_Y:.4f} cm "
+          f"(end-box regions are solid full-pitch homogenized blocks — no "
+          f"gap subdivision there)")
     print(f"\nBlade model:")
     print(f"  BLADE_LENGTH = {BLADE_LENGTH} cm (fixed)")
     print(f"  ROD_TRAVEL   = {ROD_TRAVEL} cm")
