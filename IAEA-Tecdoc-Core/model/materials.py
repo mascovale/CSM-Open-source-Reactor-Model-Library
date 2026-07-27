@@ -207,6 +207,74 @@ if USE_AL_SAB:
 # per the 2026-07-20 meeting decision.
 
 # =============================================================================
+# DEPLETION ZONING — per-element, per-axial-zone fuel meat materials
+#
+# [MCNP-VISUAL — UNCONFIRMED, pending Kyle]
+# The zoning scheme was read visually from a zx slice plot of the reference
+# MCNP model. It is NOT transcribed from the model source and NOT confirmed by
+# Kyle. Every claim it rests on carries that status:
+#   * 5 axial depletion zones over the active height   [MCNP-VISUAL]
+#   * uniform zone height (60/5 = 12.0 cm)             [DERIVED, MCNP-VISUAL]
+#   * all plates in an element share a zone material   [MCNP-VISUAL, inferred]
+#   * one unique material per element per zone         [MCNP-VISUAL]
+#
+# N_AXIAL_ZONES below is the ONLY place the zone count is written. Zone
+# boundaries, volumes and cell counts are all derived from it in geometry.py —
+# changing 5 to any other integer is a one-line edit and breaks no assertion.
+#
+# This module holds NO geometry dimensions: zone height and meat volume are
+# computed in geometry.py, next to the dimensions they derive from, and the
+# volume is passed in. Structural scaffolding only — nothing here executes or
+# configures depletion.
+# =============================================================================
+
+N_AXIAL_ZONES = 5     # [MCNP-VISUAL — UNCONFIRMED, pending Kyle]
+
+assert isinstance(N_AXIAL_ZONES, int) and N_AXIAL_ZONES >= 1, \
+    "N_AXIAL_ZONES must be a positive integer"
+
+# (element_id, zone_index) -> Material, in creation order.
+_zoned_fuel_registry = {}
+
+
+def make_zoned_fuel(element_id, zone_index, volume):
+    """One depletion material: element `element_id`, axial zone `zone_index`.
+
+    Fills that zone's meat band in ALL plates of the element — plates within an
+    element share a zone material and are NOT differentiated per plate.
+    zone_index 0 = bottom of the active fuel, N_AXIAL_ZONES-1 = top.
+    `volume` is computed by the caller from the authoritative geometry
+    dimensions; materials.py holds no geometry constants.
+
+    Composition, temperature (332.1 K) and any S(a,b) are inherited unchanged
+    from the base `fuel` material via clone(); nothing is re-specified here, so
+    all zoned materials start life identical to the fresh-core fuel.
+
+    Repeat calls with the same key return the same material, so building the
+    geometry more than once in a process does not duplicate materials.
+    """
+    if not 0 <= zone_index < N_AXIAL_ZONES:
+        raise ValueError(
+            f"zone_index {zone_index} outside [0, {N_AXIAL_ZONES})")
+
+    key = (element_id, zone_index)
+    if key in _zoned_fuel_registry:
+        return _zoned_fuel_registry[key]
+
+    m = fuel.clone()
+    m.name       = f'fuel_{element_id}_z{zone_index}'
+    m.depletable = True
+    m.volume     = volume
+    _zoned_fuel_registry[key] = m
+    return m
+
+
+def get_zoned_fuels():
+    """Every zoned fuel material created so far, in creation order."""
+    return list(_zoned_fuel_registry.values())
+
+
+# =============================================================================
 # Collect all materials into a Materials object for export
 # =============================================================================
 

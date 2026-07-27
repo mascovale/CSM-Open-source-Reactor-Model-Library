@@ -56,7 +56,8 @@ All dimensions in cm.
 """
 
 import openmc
-from materials import fuel, clad, water, water_core, b4c, graphite, aluminum, end_box_homog
+from materials import (fuel, clad, water, water_core, b4c, graphite, aluminum,
+                       end_box_homog, N_AXIAL_ZONES, make_zoned_fuel)
 
 # =============================================================================
 # LATTICE / ELEMENT ENVELOPE
@@ -154,6 +155,67 @@ _z_model_top    = openmc.ZPlane(z0=CORE_TOP)           # +90.0 cm
 _z_model_bot    = openmc.ZPlane(z0=CORE_BOTTOM)        # −90.0 cm
 
 
+# =============================================================================
+# FUEL MEAT AXIAL DEPLETION ZONES
+#
+# [MCNP-VISUAL — UNCONFIRMED, pending Kyle] The zone count and the assumption
+# of uniform zone height were read visually from a zx slice plot of the
+# reference MCNP model — see the tagging block in materials.py, which owns
+# N_AXIAL_ZONES. Nothing here is [TECDOC].
+#
+# The zone bounds are derived from the ACTIVE MEAT planes themselves (reading
+# .z0 off the existing shared surfaces), NOT from ELEM_Z. ELEM_Z is the element
+# extent; if the two ever diverge, zones derived from ELEM_Z would silently
+# fail to tile the meat. The tiling assert below tests the quantity that
+# actually matters.
+#
+# Zoning is opt-in (build_core_geometry(depletion_zoning=True)). With it off,
+# none of these surfaces are created and the model is unchanged.
+# =============================================================================
+
+MEAT_BOT_Z  = _z_fuel_bot.z0     # −30.0 cm — active meat lower bound
+MEAT_TOP_Z  = _z_fuel_top.z0     # +30.0 cm — active meat upper bound
+MEAT_HEIGHT = MEAT_TOP_Z - MEAT_BOT_Z                       # 60.0 cm
+
+MEAT_ZONE_HEIGHT           = MEAT_HEIGHT / N_AXIAL_ZONES    # 12.0 cm for N=5
+MEAT_ZONE_VOLUME_PER_PLATE = MEAT_THICK * MEAT_WIDTH * MEAT_ZONE_HEIGHT
+
+assert abs((MEAT_BOT_Z + N_AXIAL_ZONES * MEAT_ZONE_HEIGHT) - MEAT_TOP_Z) < 1e-12, \
+    "axial zones do not tile the active meat height"
+
+# Interior zone dividers, created ONCE and reused across all 28 fueled element
+# universes — never inside the per-element builder, which would put
+# (N_AXIAL_ZONES-1) x 28 coincident redundant planes in the model.
+#
+# Created lazily rather than at import: module-level surface construction
+# consumes the global auto-ID counter and would shift every subsequent surface
+# ID, so the zoning-OFF model would stop being byte-for-byte identical to the
+# Phase One baseline.
+_FUEL_ZONE_PLANES = None
+
+
+def fuel_zone_planes():
+    """The N_AXIAL_ZONES-1 interior zone ZPlanes (−18, −6, +6, +18 for N=5)."""
+    global _FUEL_ZONE_PLANES
+    if _FUEL_ZONE_PLANES is None:
+        _FUEL_ZONE_PLANES = [
+            openmc.ZPlane(z0=MEAT_BOT_Z + k * MEAT_ZONE_HEIGHT)
+            for k in range(1, N_AXIAL_ZONES)
+        ]
+    return _FUEL_ZONE_PLANES
+
+
+def zone_z_bounds(k):
+    """(lower, upper) ZPlane surfaces bounding axial zone k.
+
+    zone 0 = bottom (z = MEAT_BOT_Z). The outermost bounds reuse the existing
+    shared active-fuel planes, so no duplicate surface is made at ±30.
+    """
+    planes = fuel_zone_planes()
+    return (_z_fuel_bot if k == 0 else planes[k - 1],
+            _z_fuel_top if k == N_AXIAL_ZONES - 1 else planes[k])
+
+
 
 # =============================================================================
 # STANDARD FUEL ELEMENT
@@ -162,14 +224,28 @@ _z_model_bot    = openmc.ZPlane(z0=CORE_BOTTOM)        # −90.0 cm
 # End-box and water regions fill the full pitch footprint above/below.
 # =============================================================================
 
-def make_standard_fuel_element(elem_id):
+def make_standard_fuel_element(elem_id, element_id=None, zoned=False):
     """
     Standard ANL/TECDOC A-2 fuel element.
 
     X = plate meat width direction (side plates bound this)
     Y = plate/channel stack direction (plates stacked here)
     Z = axial (active fuel from -30 to +30 cm)
+
+    elem_id     integer index, unchanged — drives every cell name.
+    element_id  core-map position label ('B4', ...) — depletion zoning only.
+    zoned       when True, each plate's meat is split into N_AXIAL_ZONES
+                stacked cells sharing one material per zone across all plates
+                of this element. When False the element is built exactly as it
+                always has been.
     """
+    if zoned and element_id is None:
+        raise ValueError("zoned=True requires a core-map element_id label")
+
+    # One material per axial zone, shared by all 23 plates of this element.
+    zone_mats = ([make_zoned_fuel(element_id, k,
+                                  N_PLATES_STD * MEAT_ZONE_VOLUME_PER_PLATE)
+                  for k in range(N_AXIAL_ZONES)] if zoned else None)
 
     # Pitch cell boundaries
     pitch_left  = openmc.XPlane(x0=-PITCH_X / 2.0)
@@ -231,11 +307,8 @@ def make_standard_fuel_element(elem_id):
         meat_top    = openmc.YPlane(y0=y + plate_thick - clad_top)
 
         # Meat: bounded in x, y, AND z (active zone only)
-        meat_region = (
-            +meat_left & -meat_right &
-            +meat_bottom & -meat_top &
-            +meat_zbot & -meat_ztop
-        )
+        meat_xy = +meat_left & -meat_right & +meat_bottom & -meat_top
+        meat_region = meat_xy & +meat_zbot & -meat_ztop
 
         # Plate region bounded to active zone
         plate_region = (
@@ -244,11 +317,23 @@ def make_standard_fuel_element(elem_id):
             active_z
         )
 
-        cells.append(openmc.Cell(
-            name=f'std{elem_id}_meat_{i}',
-            fill=fuel,
-            region=meat_region
-        ))
+        if zoned:
+            # One cell per axial zone. The clad cell below still subtracts the
+            # FULL meat_region, so the zone cells tile the same volume the
+            # single meat cell occupied — no gap, no overlap.
+            for k in range(N_AXIAL_ZONES):
+                z_lo, z_hi = zone_z_bounds(k)
+                cells.append(openmc.Cell(
+                    name=f'std{elem_id}_meat_{i}_z{k}',
+                    fill=zone_mats[k],
+                    region=meat_xy & +z_lo & -z_hi
+                ))
+        else:
+            cells.append(openmc.Cell(
+                name=f'std{elem_id}_meat_{i}',
+                fill=fuel,
+                region=meat_region
+            ))
         cells.append(openmc.Cell(
             name=f'std{elem_id}_clad_{i}',
             fill=clad,
@@ -427,6 +512,13 @@ CTRL_HF_THICK       = ABSORBER_THICK
 N_CTRL_FUEL_PLATES  = 17
 CTRL_PLATE_PITCH    = PLATE_THICK_INNER + WATER_CHAN_THICK   # 0.346 cm
 
+# N_PLATES_CTRL (module top) and N_CTRL_FUEL_PLATES are two names for the same
+# 17-plate follower stack — pre-existing duplication. The follower loop and the
+# zoned-material volumes both key off N_CTRL_FUEL_PLATES; this tripwire stops
+# the two from drifting apart and silently mis-sizing a depletion volume.
+assert N_CTRL_FUEL_PLATES == N_PLATES_CTRL, \
+    "N_CTRL_FUEL_PLATES and N_PLATES_CTRL disagree on the follower plate count"
+
 # Follower fuel stack half-width (standard 0.127/0.219 pitch, symmetric)
 CTRL_FUEL_STACK_HALF = (N_CTRL_FUEL_PLATES * PLATE_THICK_INNER
                         + (N_CTRL_FUEL_PLATES - 1) * WATER_CHAN_THICK) / 2.0  # 2.8315 cm
@@ -458,7 +550,8 @@ assert CTRL_BLADE_WATER >= 0.05, (
     f"CTRL_OUTER_OFFSET={CTRL_OUTER_OFFSET} — check end-block budget")
 
 
-def make_control_fuel_element(elem_id, withdrawn_fraction=0.0):
+def make_control_fuel_element(elem_id, withdrawn_fraction=0.0,
+                              element_id=None, zoned=False):
     """
     Control fuel element with a fixed-length (60 cm) B4C absorber blade that
     translates in z.
@@ -468,7 +561,24 @@ def make_control_fuel_element(elem_id, withdrawn_fraction=0.0):
         f=1 → blade at z=[+30, +90] (all-out, blade entirely above active fuel)
 
     The blade always exists; only its z-position changes.
+
+    elem_id     integer index, unchanged — drives every cell name.
+    element_id  core-map position label ('C2', ...) — depletion zoning only.
+    zoned       when True, each follower plate's meat is split into
+                N_AXIAL_ZONES stacked cells sharing one material per zone
+                across all 17 plates. The absorber slot lives in a different
+                y-band than the meat (see the slot/meat disjointness note in
+                the follower section below), so the axial cut never touches
+                the blade, its slot, or the sliding-cap logic.
     """
+    if zoned and element_id is None:
+        raise ValueError("zoned=True requires a core-map element_id label")
+
+    # One material per axial zone, shared by all 17 follower plates.
+    zone_mats = ([make_zoned_fuel(element_id, k,
+                                  N_CTRL_FUEL_PLATES * MEAT_ZONE_VOLUME_PER_PLATE)
+                  for k in range(N_AXIAL_ZONES)] if zoned else None)
+
     f = withdrawn_fraction
     z_bot = -HALF_Z + f * ROD_TRAVEL   # blade bottom
     z_top = z_bot + BLADE_LENGTH        # blade top
@@ -681,19 +791,31 @@ def make_control_fuel_element(elem_id, withdrawn_fraction=0.0):
 
         meat_b = openmc.YPlane(y0=plate_bot + CLAD_THICK_INNER)
         meat_t = openmc.YPlane(y0=plate_top - CLAD_THICK_INNER)
-        meat_region = (
-            +meat_b & -meat_t &
-            +meat_left & -meat_right &
-            +meat_zbot & -meat_ztop
-        )
+        # The meat y-band lies inside the follower stack [-2.8315, +2.8315];
+        # the Hf slots sit at |y| in [3.3165, 3.6265], outside it. Meat and
+        # absorber slot are disjoint in y, so the axial zone cut below cannot
+        # interact with the blade cells or the not_hf_slots complement.
+        meat_xy = +meat_b & -meat_t & +meat_left & -meat_right
+        meat_region = meat_xy & +meat_zbot & -meat_ztop
         clad_region = (
             +plate_bot_s & -plate_top_s &
             +side_inner_left & -side_inner_right &
             active_z &
             ~meat_region
         )
-        cells.append(openmc.Cell(
-            name=f'ctrl{elem_id}_meat_{i}', fill=fuel, region=meat_region))
+        if zoned:
+            # One cell per axial zone; clad_region still subtracts the FULL
+            # meat_region, so the zone cells tile exactly what the single meat
+            # cell occupied.
+            for k in range(N_AXIAL_ZONES):
+                z_lo, z_hi = zone_z_bounds(k)
+                cells.append(openmc.Cell(
+                    name=f'ctrl{elem_id}_meat_{i}_z{k}',
+                    fill=zone_mats[k],
+                    region=meat_xy & +z_lo & -z_hi))
+        else:
+            cells.append(openmc.Cell(
+                name=f'ctrl{elem_id}_meat_{i}', fill=fuel, region=meat_region))
         cells.append(openmc.Cell(
             name=f'ctrl{elem_id}_clad_{i}', fill=clad, region=clad_region))
 
@@ -920,14 +1042,96 @@ graphite_univ = make_graphite_element()
 
 
 # =============================================================================
+# CORE MAP — position labels for the 8x9 grid plate
+#
+# Token grid mirroring lattice_universes below, one token per grid position:
+#   'S' standard fuel   'C' control fuel   'F' flux trap
+#   'G' graphite        'W' water
+# A token-for-token assert in build_core_geometry() ties this grid to the
+# lattice literal, so the two can never drift apart by hand.
+#
+# TECDOC-643 A-2 Table 1: "Grid Plate 8x9 Positions", "Active Core Geometry
+# 5x6 Positions", 23 standard + 5 control elements, and two irradiation
+# channels — "1 at Core Center" and "1 at Core Edge" (A-2 §1: one water-filled
+# flux trap near the center of the core, another near an edge). The literal
+# below places them at D4 (center) and A6 (edge), which is the benchmark
+# configuration.
+#
+# LABELS cover the inner 6x7 region only (the fuelled/reflector positions);
+# the surrounding water ring is unlabelled. Columns A-F run left to right in
+# +x; rows 1-7 run top to bottom, so ROW 1 IS THE +y EDGE — matching the array
+# order of CORE_MAP and lattice_universes, so a reader comparing the two never
+# has to mentally flip anything.
+#
+# The letter/number convention is THIS PROJECT'S OWN — TECDOC-643 A-2 specifies
+# no element labeling scheme, so the convention itself carries no [TECDOC] tag.
+# Labels feed no dimension, surface, or cell region; they name depletion
+# materials and nothing else.
+# =============================================================================
+
+CORE_MAP_COLS = 'ABCDEF'
+CORE_MAP = [
+    ['W', 'W', 'W', 'W', 'W', 'W', 'W', 'W'],
+    ['W', 'G', 'G', 'G', 'G', 'G', 'G', 'W'],
+    ['W', 'S', 'S', 'C', 'S', 'S', 'S', 'W'],
+    ['W', 'S', 'S', 'S', 'S', 'C', 'S', 'W'],
+    ['W', 'S', 'C', 'S', 'F', 'S', 'S', 'W'],
+    ['W', 'S', 'S', 'S', 'S', 'C', 'S', 'W'],
+    ['W', 'F', 'S', 'C', 'S', 'S', 'S', 'W'],
+    ['W', 'G', 'G', 'G', 'G', 'G', 'G', 'W'],
+    ['W', 'W', 'W', 'W', 'W', 'W', 'W', 'W'],
+]
+
+
+def core_map_label(row, col):
+    """Position label for grid index (row, col), or None outside the inner 6x7."""
+    if 1 <= row <= 7 and 1 <= col <= 6:
+        return f'{CORE_MAP_COLS[col - 1]}{row}'
+    return None
+
+
+def core_map_labels(token):
+    """Row-major list of position labels for a CORE_MAP token ('S', 'C', ...).
+
+    Row-major order matches the order the lattice literal assigns std_elems[i]
+    and ctrl_elems[i], so labels line up with those indices element for element.
+    """
+    return [core_map_label(i, j)
+            for i, row in enumerate(CORE_MAP)
+            for j, t in enumerate(row) if t == token]
+
+
+STD_ELEMENT_IDS  = core_map_labels('S')   # 23 standard element positions
+CTRL_ELEMENT_IDS = core_map_labels('C')   # 5 control element positions
+
+assert len(STD_ELEMENT_IDS) == 23, \
+    f"CORE_MAP has {len(STD_ELEMENT_IDS)} 'S' positions, expected 23"
+assert len(CTRL_ELEMENT_IDS) == 5, \
+    f"CORE_MAP has {len(CTRL_ELEMENT_IDS)} 'C' positions, expected 5"
+assert sum(r.count('F') for r in CORE_MAP) == 2, \
+    "CORE_MAP must have exactly 2 flux traps (A-2 Table 1: 1 center, 1 edge)"
+assert None not in STD_ELEMENT_IDS + CTRL_ELEMENT_IDS, \
+    "a fuelled position fell outside the labelled inner 6x7 region"
+assert len(set(STD_ELEMENT_IDS + CTRL_ELEMENT_IDS)) == 28, \
+    "duplicate core-map labels"
+
+
+# =============================================================================
 # CORE LATTICE — TECDOC-643 Fig. 2.1 (LEU panel)
 # =============================================================================
 
-def build_core_geometry(withdrawn_fraction=1.0):
+def build_core_geometry(withdrawn_fraction=1.0, depletion_zoning=False):
     """Build the full-core openmc.Geometry for a blade WITHDRAWAL fraction f.
 
     f = 0.0 → blades fully INSERTED  (absorber spans z=[-30, +30])
     f = 1.0 → blades fully WITHDRAWN (absorber spans z=[+30, +90])
+
+    depletion_zoning=True splits every fuel meat cell into N_AXIAL_ZONES axial
+    cells, one depletable material per element per zone (28 x N materials, all
+    starting from the identical base fuel composition). Structural scaffolding
+    for a later depletion study — it configures nothing about depletion itself.
+    Default False: the Phase One fresh-core cross-validation baseline must not
+    move. With it off the model is byte-for-byte what it has always been.
 
     This is the single construction path used by core.build_model() and all
     run/ drivers. Vacuum boundaries at the lattice edge and at
@@ -935,9 +1139,12 @@ def build_core_geometry(withdrawn_fraction=1.0):
     (water/end-box/fuel/end-box/water); the withdrawn (f=1) blade top
     coincides exactly with CORE_TOP, so there is no water cap above it.
     """
-    std_elems  = [make_standard_fuel_element(i) for i in range(23)]
-    ctrl_elems = [make_control_fuel_element(100 + i,
-                                            withdrawn_fraction=withdrawn_fraction)
+    std_elems  = [make_standard_fuel_element(
+                      i, element_id=STD_ELEMENT_IDS[i], zoned=depletion_zoning)
+                  for i in range(23)]
+    ctrl_elems = [make_control_fuel_element(
+                      100 + i, withdrawn_fraction=withdrawn_fraction,
+                      element_id=CTRL_ELEMENT_IDS[i], zoned=depletion_zoning)
                   for i in range(5)]
 
     W = water_univ
@@ -957,6 +1164,21 @@ def build_core_geometry(withdrawn_fraction=1.0):
         [W, G, G, G, G, G, G, W],
         [W, W, W, W, W, W, W, W],
     ]
+
+    # CORE_MAP must mirror the lattice literal token for token. This is the
+    # guard that stops the two from being reconciled by hand: the labels that
+    # name depletion materials are only meaningful if the map matches what is
+    # actually built.
+    _token_of = {W: 'W', G: 'G', F: 'F'}
+    _token_of.update({u: 'S' for u in S})
+    _token_of.update({u: 'C' for u in C})
+    for _i, (_map_row, _lat_row) in enumerate(zip(CORE_MAP, lattice_universes)):
+        _built = [_token_of[u] for u in _lat_row]
+        assert _built == _map_row, (
+            f"CORE_MAP row {_i} {_map_row} disagrees with the lattice "
+            f"literal {_built}")
+    assert len(CORE_MAP) == len(lattice_universes), \
+        "CORE_MAP and lattice_universes have different row counts"
 
     core_lattice = openmc.RectLattice(name='core_lattice')
     core_lattice.pitch      = (PITCH_X, PITCH_Y)

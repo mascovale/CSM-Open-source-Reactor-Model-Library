@@ -57,6 +57,13 @@ class CoreConfig:
     inactive:  int = 50
     seed:      int | None = None          # None → OpenMC default (1)
 
+    # Depletion material zoning — segment the fuel meat into per-element,
+    # per-axial-zone depletable materials (28 elements x N_AXIAL_ZONES).
+    # Structural scaffolding only: no depletion is configured or executed.
+    # OFF by default — the Phase One fresh-core cross-validation against the
+    # reference MCNP model must keep seeing the unchanged model.
+    depletion_zoning: bool = False
+
     # Paths
     output_dir: str = 'run_results/core_run'
     cross_sections: str | None = None     # None → env var, then local fallback
@@ -110,7 +117,39 @@ def build_model(cfg: CoreConfig) -> openmc.Model:
     from settings import settings
     from tallies import build_tallies
 
-    geometry = build_core_geometry(withdrawn_fraction=f_withdrawal)
+    geometry = build_core_geometry(withdrawn_fraction=f_withdrawal,
+                                   depletion_zoning=cfg.depletion_zoning)
+
+    # Zoned fuel materials are created during the geometry build, so they are
+    # collected after it. With zoning off this is the untouched `materials`
+    # object itself — the exported model is unchanged.
+    if cfg.depletion_zoning:
+        from materials import fuel as base_fuel, get_zoned_fuels
+        zoned_fuels = get_zoned_fuels()
+
+        # When zoned, every meat cell is filled by a zoned clone and the base
+        # fuel fills nothing. Verify that rather than assume it: a base-fuel
+        # cell surviving here would mean the axial split missed a meat cell.
+        stray = [c.name for c in geometry.get_all_cells().values()
+                 if c.fill is base_fuel]
+        if stray:
+            raise RuntimeError(
+                f"depletion zoning: {len(stray)} cell(s) still filled with the "
+                f"base fuel material — the axial split missed them: "
+                f"{stray[:5]}{' ...' if len(stray) > 5 else ''}")
+
+        # Drop the base fuel from the exported set. It survives in materials.py
+        # as the clone() source for make_zoned_fuel, but it fills no cell here,
+        # and OpenMC auto-flags any actinide-bearing material depletable — so
+        # exporting it would hand a future depletion solve an unused depletable
+        # material with volume=None, which misnormalizes quietly rather than
+        # failing. Zoning-off path keeps the collection exactly as it was.
+        model_materials = openmc.Materials(
+            [m for m in materials if m is not base_fuel] + zoned_fuels)
+        print(f"[core] depletion zoning ON: {len(zoned_fuels)} zoned fuel "
+              f"materials (unused base fuel excluded from the export)")
+    else:
+        model_materials = materials
 
     settings.particles   = cfg.particles
     settings.batches     = cfg.batches
@@ -121,7 +160,7 @@ def build_model(cfg: CoreConfig) -> openmc.Model:
 
     return openmc.Model(
         geometry=geometry,
-        materials=materials,
+        materials=model_materials,
         settings=settings,
         tallies=build_tallies(),
     )
@@ -204,6 +243,10 @@ def main(argv=None):
     p.add_argument('--inactive', type=int, default=None)
     p.add_argument('--seed', type=int, default=None)
     p.add_argument('--output-dir', type=str, default=None)
+    p.add_argument('--depletion-zoning', action='store_true',
+                   help='split the fuel meat into per-element, per-axial-zone '
+                        'depletable materials (structural only — configures no '
+                        'depletion). Default off.')
     args = p.parse_args(argv)
 
     cfg = CoreConfig()
@@ -219,8 +262,14 @@ def main(argv=None):
         cfg.seed = args.seed
     if args.output_dir is not None:
         cfg.output_dir = args.output_dir
+    if args.depletion_zoning:
+        cfg.depletion_zoning = True
 
-    print(f"[core] config: { {k: v for k, v in asdict(cfg).items() if not k.startswith('depletion') and k != 'chain_file'} }")
+    # depletion_zoning is a real run knob and prints; the other depletion_*
+    # fields are unimplemented placeholders and stay hidden.
+    _hidden = {'chain_file', 'power_w', 'depletion_timesteps',
+               'depletion_integrator'}
+    print(f"[core] config: { {k: v for k, v in asdict(cfg).items() if k not in _hidden} }")
     run_eigenvalue(cfg)
 
 
