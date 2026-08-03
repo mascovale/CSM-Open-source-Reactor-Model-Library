@@ -54,8 +54,10 @@ clad = openmc.Material(name='Al_6061_cladding')
 clad.temperature = 330.7 
 clad.set_density('g/cm3', 2.70)
 clad.add_element('Al', 1.00, 'ao')
-# Pure aluminum stands in for 6061-T6; the minor alloying elements (Mg, Si, Cu,
-# Cr, Zn, Ti, Fe — ~2.7 w/o total) have negligible reactivity effect here.
+# Pure aluminum stands in for 6061-T6. [MCNP] — this is NOT an approximation we
+# chose independently: the reference MCNP model does the same thing, and the
+# resulting Al-27 number densities agree exactly.
+#   OpenMC 6.026261E-02  vs  MCNP 6.026260E-02  atoms/b-cm  —  MATCH, 0.0000%
 # Al metal S(a,b) (c_Al27) added per the 2026-07-20 meeting decision, gated on
 # USE_AL_SAB (ENDF/B-VIII.0 provides c_Al27; VII.0 does not).
 if USE_AL_SAB:
@@ -137,8 +139,27 @@ b4c.set_density('sum')
 # =============================================================================
 # REFLECTOR MATERIAL
 # Graphite reflector blocks surrounding the core.
-# Density: [TECDOC] 1.7000 g/cm3 per the 2026-07-20 meeting decision (replaces
-# the deck-implied ~1.740 g/cm3 that the prior atom-density spec produced).
+#
+# Density: 8.724000E-02 atoms/b-cm total carbon, taken DIRECTLY from the
+# reference MCNP model card m00005 [MCNP]:
+#
+#   m00005     $     294.0    Graphite reflector
+#          6000    8.724000E-02
+#
+# TECDOC-643 specifies no graphite density; neither model assigns a mass
+# density to this material — the atom density above is the specification on
+# both sides. The 1.7400 g/cm3 previously here was this same atom density
+# back-converted and rounded (8.724000E-02 -> 1.74000 g/cm3 using OpenMC's
+# isotopic masses, M_eff = 12.01112 from 0.988922 x 12.000000 +
+# 0.011078 x 13.00335484); it reproduced the atom density to 0.0003%, inside
+# the 0.010% tolerance. Specifying in atom/b-cm removes even that round-off.
+#
+# Card 6000 is natural carbon, unsplit. OpenMC's add_element('C') expands to
+# C-12/C-13 (no natural-carbon evaluation exists in ENDF/B-VIII.0), so the
+# C-12/C-13 split below is an OpenMC-side method artifact with no MCNP
+# counterpart — the spreadsheet carries those rows as N/A on the MCNP side.
+# For a VII.0 matched-library run the exact counterpart is the C0 nuclide
+# (USE_NATURAL_CARBON branch below).
 # =============================================================================
 
 graphite = openmc.Material(name='graphite_reflector')
@@ -146,9 +167,8 @@ graphite.temperature = 294.0                      # deck: $ 294.0
 if USE_NATURAL_CARBON:
     graphite.add_nuclide('C0', 1.0)
 else:
-    graphite.add_nuclide('C12', 0.9893)
-    graphite.add_nuclide('C13', 0.0107)
-graphite.set_density('g/cm3', 1.7400)
+    graphite.add_element('C', 1.0)
+graphite.set_density('atom/b-cm', 8.724000E-02)
 graphite.add_s_alpha_beta('c_Graphite')
 
 # =============================================================================

@@ -297,7 +297,13 @@ check("zone cells span exactly [MEAT_BOT_Z, MEAT_TOP_Z]",
 print("\n=== 6. Coordinate probes ===")
 
 _NROWS = len(g.CORE_MAP)
-_LL_X, _LL_Y = -4.0 * g.PITCH_X, -4.5 * g.PITCH_Y
+# Lattice lower_left. Derived from the lattice envelope (CORE_HALF_X/Y are
+# lattice half-extents despite the name), never hardcoded: this
+# was -4.0*PITCH_X, -4.5*PITCH_Y — the extent of the pre-B4 8x9 lattice
+# including its water ring. After B4 reduced the lattice to the 6x7 core
+# positions, that put every probe a full pitch cell off, so the zone-ordering
+# checks read pool water at x = -26.95 (outside the +/-23.1 core) and failed.
+_LL_X, _LL_Y = -g.CORE_HALF_X, -g.CORE_HALF_Y
 
 
 def element_center(label):
