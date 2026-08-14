@@ -1,8 +1,8 @@
 ' ========================================================================
 ' SolidWorks appearance table -- GENERATED FILE, DO NOT EDIT
 ' ========================================================================
-' Generated  2026-08-03 by figures/make_figures.py
-' Source     figures/figstyle.py REGION_FILL, at commit e018a6f
+' Generated  2026-08-14 by figures/make_figures.py
+' Source     figures/figstyle.py REGION_FILL, at commit 22ee7a0
 '
 ' These are the SAME colours the manuscript renders use, so a part
 ' shaded from this table matches its figure. SolidWorks has no external
@@ -11,12 +11,12 @@
 ' ========================================================================
 
 '  region              R    G    B   hex        display name
-'  clad              200  216  238   #C8D8EE   Al 6061 cladding
-'  structural_Al     161  178  197   #A1B2C5   Structural aluminium
-'  meat              236   96   83   #EC6053   U$_3$Si$_2$-Al fuel meat
-'  B4C                46  139   87   #2E8B57   B$_4$C absorber
-'  pool_water          0  123  255   #007BFF   Pool water, 294 K
-'  end_box            13   72  112   #0D4870   End box, homogenised Al/H$_2$O
-'  coolant             0    0  128   #000080   Coolant water, 316.8 K
-'  graphite            3    3    3   #030303   Graphite reflector
+'  pool_water        237  247  255   #EDF7FF   Pool water, 294 K
+'  structural_Al     210  205  199   #D2CDC7   Structural aluminium
+'  clad              190  209  227   #BED1E3   Al 6061 cladding
+'  end_box           181  164  143   #B5A48F   End box, homogenised Al/H$_2$O
+'  meat              218   94   61   #DA5E3D   U$_3$Si$_2$-Al fuel meat
+'  coolant            50   98  140   #32628C   Coolant water, 316.8 K
+'  B4C                 7   70   53   #074635   B$_4$C absorber
+'  graphite           13   10    8   #0D0A08   Graphite reflector
 

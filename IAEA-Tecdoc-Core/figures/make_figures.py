@@ -6,7 +6,8 @@ manuscript (Elsevier CAS, single column, a4paper).
 
     fig1_core_map.pdf    position designations only -- no material fills
     fig2_core_xy.pdf     OpenMC render, XY slice, full core at f = 0
-    fig3_axial_xz.pdf    OpenMC render, XZ slice through the absorber slot
+    fig3_axial_xz.pdf    OpenMC renders, axial elevation: XZ through the
+                         absorber slot | YZ on the D4 flux-trap axis
     fig4_elements.pdf    OpenMC renders, SFE | CFE | flux trap at one scale
 
 fig2-fig4 are native OpenMC geometry-plotter output -- flat fills, thin cell
@@ -160,6 +161,55 @@ OUTLINE_LW = 0.08          # measured; see the header table
 FIG3_POOL_MARGIN = 0.4 * ENDBOX_HEIGHT          # 5.6 cm
 FIG3_Z_HALF = ENDBOX_ABOVE_TOP + FIG3_POOL_MARGIN
 
+# fig3 panel (b): the y-z elevation is cut through the CENTRAL flux trap, named
+# by its CORE_MAP position rather than by coordinate. The other trap is A6, at
+# the core edge; D4 is the one the manuscript calls the central trap.
+FIG3_TRAP = 'D4'
+
+# ---------------------------------------------------------------------------
+# fig3 panel (b) crop -- WHY IT IS NOT PANEL (a)'s CROP
+# ---------------------------------------------------------------------------
+# Panel (a) is fixed, so the shared printed height is fixed, so at equal aspect
+# (b)'s SCALE is height / z-span. Narrowing (b) in Y cannot change that: it
+# crops, it does not magnify. At (a)'s 101.2 cm span the plate body -- the light
+# clad+meat+clad bar between two coolant channels -- prints 113 um, under the
+# ~170 um halftone cell, so the plate stack renders as a dark field with a
+# sub-resolution texture rather than as lamination. Only a shorter z span fixes
+# it, because only that raises the scale.
+#
+# 62.0 cm = 2 * HALF_PLATE_Z, the full fuel plate height: a real geometric
+# boundary, not a chosen round number. It gives 1:6.90, and:
+#     plate pitch  501 um     plate body  184 um  (clears the cell)
+#     meat          74 um     -- does NOT resolve, by design
+# So each plate reads as one light bar and the clad/meat/clad substructure
+# inside it stays merged. That is the intent: lamination reads as lamination,
+# not every detail.
+#
+# 24.3 cm = 3 * PITCH_Y, three whole lattice rows centred on the trap: a full
+# standard element, the trap, a full standard element. Whole rows, so no element
+# is sliced in half at the frame edge.
+FIG3_B_Z_HALF = HALF_PLATE_Z        # 31.0 cm
+FIG3_B_ROWS   = 3                   # D3, D4, D5
+
+# EMITTED width. The layout arithmetic still runs on FIG1_WIDTH_FRAC, because
+# that is what fixes panel (a)'s printed size and panel (a) must not move; but
+# the narrow (b) means the two panels no longer fill that measure, so the figure
+# is emitted at its own width instead of carrying 1.4 cm of dead margin. Held as
+# a declared fraction rather than measured at run time so that check_figures has
+# an independent number to test the emitted MediaBox against -- a target read
+# back out of the builder would only ever agree with itself.
+# Content measures 8.07 cm -- the panel row, which is now the widest element
+# (the legend is 7.45 cm). 0.50 leaves ~0.16 cm of slack, and save() asserts if
+# that is ever exceeded. Was 0.53 while the sub-captions overhung their panels.
+FIG3_WIDTH_FRAC = 0.50
+
+# CONSEQUENCE, RECORDED BECAUSE IT IS EASY TO MISREAD AS A FIX. This crop drops
+# the graphite reflector rows (column D is G,S,S,F,S,S,G) and, with the z crop,
+# the end box and pool water as well. The coolant/graphite pair that fig3 used
+# to carry is therefore OUT OF FRAME BY GEOMETRY -- the crop resolves nothing.
+# What resolved it is the 2026-08-13 palette rebuild, which moved the pair from
+# 0.0455 to 0.3076 everywhere it occurs, fig2 included. Two separate facts.
+
 # fig4 split panels: each stands at 0.48 x textwidth so two sit side by side in
 # a row of minipages, or one at half measure.
 FIG4_SPLIT_FRAC = 0.48
@@ -214,6 +264,13 @@ def check_geometry_consistency():
         f'fig3 slot cut y={SLOT_Y} is outside the absorber band'
     assert ENDBOX_ABOVE_TOP < FIG3_Z_HALF < CORE_TOP, \
         'fig3 crop must clear the end box but stay inside the model'
+    # fig3 panel (b) must cut a flux trap, and cut it on the AXIS -- that is the
+    # only x giving the full 2r chord. Checked against CORE_MAP so that moving
+    # or renaming the trap fails here rather than silently shifting the cut.
+    _trap = [core_map_label(i, j) for i, r in enumerate(CORE_MAP)
+             for j, t in enumerate(r) if t == 'F']
+    assert FIG3_TRAP in _trap, \
+        f'fig3 panel (b): {FIG3_TRAP} is not a flux trap position (traps: {_trap})'
     S.check_palette()          # hard errors only: unparseable or duplicate colour
     S.check_type_sizes()
     print(f'  [OK] tripwires; slot cut y = {SLOT_Y:.4f} cm')
@@ -525,36 +582,121 @@ def fig2_core_xy(f=0.0):
     return save(fig, 'fig2_core_xy', target_in=W, expect_px=npx, axes_in=aw)
 
 
+def flux_trap_centre(lat, label):
+    """(x, y) of the flux trap at CORE_MAP position `label`.
+
+    Keyed on the LABEL, not on a row-major index. There are two traps -- D4 and
+    A6 -- and the y-z cut has to pass through the axis of a named one, so an
+    index would silently pick the other if CORE_MAP were ever reordered.
+    """
+    nx, ny = lat.shape
+    px, py = lat.pitch
+    llx, lly = lat.lower_left
+    ury = lly + ny * py
+    for i, row in enumerate(CORE_MAP):
+        for j, tok in enumerate(row):
+            if tok == 'F' and core_map_label(i, j) == label:
+                return llx + (j + 0.5) * px, ury - (i + 0.5) * py
+    raise RuntimeError(f'no flux trap at CORE_MAP position {label}')
+
+
 def fig3_axial_xz(f=0.0):
-    """XZ through the ABSORBER SLOT so the blade is in the figure. Outline ON."""
+    """Axial elevation, two panels. Outline ON.
+
+    (a) XZ through the ABSORBER SLOT so the blade is in the figure.
+    (b) YZ through the FIG3_TRAP flux trap, cut on its cylinder AXIS so the
+        hole shows its full 2 * FT_HOLE_RADIUS diameter -- the widest chord.
+        A y-z plane anywhere else through the trap shows a shorter chord and
+        understates it.
+
+    PANEL (a) IS UNCHANGED IN EVERY RESPECT THAT AFFECTS ITS CONTENT: same crop
+    (FIG3_Z_HALF), same window (nx * px), same cut (SLOT_Y), same palette, same
+    outline/frame flags, same pixel count. Only its PLACED SIZE moved, because a
+    second panel now shares the measure. The pixel count is genuinely identical
+    rather than coincidentally so: required_pixels() takes the max of a
+    feature-limited term and a print-limited one, and at both the old and new
+    printed widths the feature term (2 * 46.2 / 0.038 = 2432) dominates.
+
+    The panels are sized to a COMMON HEIGHT at equal aspect, so (b) comes out
+    wider than (a): the lattice is 7 rows deep in y and 6 columns across in x,
+    so the y window is 56.7 cm against 46.2. Neither window is cropped or
+    widened -- each is its axis's full lattice extent.
+
+    KNOWN, DELIBERATE, NOT FIXED HERE: panel (b) is the first thing in fig3 to
+    contain graphite (column D is G,S,S,F,S,S,G), so the shared key now carries
+    all EIGHT regions and coolant/graphite join the pairs sitting under
+    figstyle.VALUE_MIN -- four now, three of which fig3 already had. This is not
+    fixable by recolouring: eight levels 0.15 apart need 1.05 of luma span and
+    only 1.0 exists, so any real fix merges two regions onto one level, which is
+    out of scope. Narrowing (b)'s window to miss the reflector rows would hide
+    it rather than fix it, and is deliberately not done.
+    """
     geom = build_core_geometry(withdrawn_fraction=f)
     lat = core_lattice_of(geom)
-    nx, _ = lat.shape
-    px, _py = lat.pitch
-    llx, _lly = lat.lower_left
-    W_cm = nx * px
-    Z_cm = 2 * FIG3_Z_HALF                      # cropped, see FIG3_POOL_MARGIN
+    nx, ny = lat.shape
+    px, py = lat.pitch
+    llx, lly = lat.lower_left
+    W_cm = nx * px                              # 46.2 -- panel (a), unchanged
+    Za_cm = 2 * FIG3_Z_HALF                     # 101.2, see FIG3_POOL_MARGIN
+    Y_cm = FIG3_B_ROWS * py                     # 24.3 -- panel (b), see above
+    Zb_cm = 2 * FIG3_B_Z_HALF                   # 62.0
     cx = llx + W_cm / 2
+    tx, ty = flux_trap_centre(lat, FIG3_TRAP)
 
-    W = FIG1_WIDTH_FRAC * textwidth_in()
+    # fig4_elements' margins, so the two multi-panel figures read as one system.
+    # LAYOUT runs on FIG1_WIDTH_FRAC and nothing else, because that is what pins
+    # panel (a)'s printed width; the figure's own width falls out below.
+    W_layout = FIG1_WIDTH_FRAC * textwidth_in()
+    pl = pr = 0.015 * W_layout
+    gap = 0.045 * W_layout
+    # Panel (a) is FIXED, and it is what sets the shared height: its printed
+    # width is what it was, so ph follows from its own aspect. (b) is then sized
+    # to that same height at ITS aspect, which is why the two scales differ.
+    pw_a = (W_layout - pl - pr - gap) * W_cm / (W_cm + ny * py)
+    ph = pw_a * Za_cm / W_cm
+    pw = {'a': pw_a, 'b': ph * Y_cm / Zb_cm}
+    # The figure is exactly as wide as its content row. Sizing the canvas to
+    # W_layout instead would leave the panels sitting left of centre while the
+    # legend, anchored at 0.5 of the FIGURE, centred somewhere else entirely.
+    W = pl + pw['a'] + gap + pw['b'] + pr
+
+    # NO SUB-CAPTIONS IN THE FIGURE. They carried each panel's z extent, which
+    # is what told a reader that the two panels are at DIFFERENT SCALES --
+    # (a) 1:11.26 over the full model height, (b) 1:6.90 over the active region.
+    # With them gone that information has to live in the manuscript caption
+    # instead; the in-figure cue is only that (b) visibly lacks the end boxes
+    # and pool water (a) opens and closes on. Panel letters stay, per
+    # fig4_elements' layout.
+    panels = [
+        ('a', 'xz', (cx, SLOT_Y, 0.0), W_cm, Za_cm),
+        ('b', 'yz', (tx, ty, 0.0), Y_cm, Zb_cm),
+    ]
     y_leg = 0.0
     pad_b = y_leg + 4 * 0.150 + 0.10
-    pl = pr = 0.02
-    aw = W * (1 - pl - pr)
-    ah = aw * Z_cm / W_cm
-    fig_h = ah + pad_b + 0.04
-    t1, t2, need = required_pixels(W_cm, aw)
-    npx = (need, int(round(need * Z_cm / W_cm)))
-    print(f'  fig3 pixels: feature {t1:.0f}, print {t2:.0f} -> {need} '
-          f'(clad {CLAD_THICK_INNER*need/W_cm:.2f} px)')
+    fig_h = pad_b + ph + 0.22
 
     fig = plt.figure(figsize=(W, fig_h))
-    ax = fig.add_axes([pl, pad_b / fig_h, 1 - pl - pr, ah / fig_h])
-    kinds = render(ax, geom, basis='xz', origin=(cx, SLOT_Y, 0.0),
-                   width=(W_cm, Z_cm), pixels=npx, outline=True, frame=True)
-    RENDERED['fig3_axial_xz'] = kinds
-    material_legend(fig, kinds, y_in=y_leg, ncol=2)
-    return save(fig, 'fig3_axial_xz', target_in=W, expect_px=npx, axes_in=aw)
+    allk = set()
+    x_in = pl
+    for key, basis, origin, w_cm, z_cm in panels:
+        t1, t2, need = required_pixels(w_cm, pw[key])
+        npx = (need, int(round(need * z_cm / w_cm)))
+        dpi_eff = npx[0] / pw[key]
+        assert dpi_eff >= 599.5, (
+            f'fig3 ({key}): {dpi_eff:.1f} dpi over {pw[key]:.4f} in is under 600')
+        ax = fig.add_axes([x_in / W, pad_b / fig_h, pw[key] / W, ph / fig_h])
+        allk |= render(ax, geom, basis=basis, origin=origin,
+                       width=(w_cm, z_cm), pixels=npx, outline=True, frame=True)
+        panel_letter(fig, ax, '(%s)' % key)
+        print(f'  fig3 ({key}) {basis} {w_cm:.1f}x{z_cm:.1f} cm  '
+              f'{pw[key]*2.54:.2f}x{ph*2.54:.2f} cm  1:{z_cm/(ph*2.54):.2f}  '
+              f'pixels feature {t1:.0f}, print {t2:.0f} -> {need} '
+              f'({npx[0]}x{npx[1]}, {dpi_eff:.0f} dpi)')
+        x_in += pw[key] + gap
+    RENDERED['fig3_axial_xz'] = allk
+    material_legend(fig, allk, y_in=y_leg, ncol=2)
+    return save(fig, 'fig3_axial_xz',
+                target_in=FIG3_WIDTH_FRAC * textwidth_in())
 
 
 def _cell_centre(tok, want_index=0):

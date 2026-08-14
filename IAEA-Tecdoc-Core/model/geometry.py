@@ -80,7 +80,7 @@ All dimensions in cm.
 
 import openmc
 from materials import (fuel, clad, water, water_core, b4c, graphite, aluminum,
-                       end_box_homog, N_AXIAL_ZONES, make_zoned_fuel)
+                       end_box_homog, N_X_ZONES, N_AXIAL_ZONES, make_zoned_fuel)
 
 # =============================================================================
 # LATTICE / ELEMENT ENVELOPE
@@ -340,18 +340,30 @@ _z_model_bot    = openmc.ZPlane(z0=CORE_BOTTOM)        # −90.0 cm
 
 
 # =============================================================================
-# FUEL MEAT AXIAL DEPLETION ZONES
+# FUEL MEAT DEPLETION ZONES — 2D, x (width) x z (axial)
 #
-# [MCNP-VISUAL — UNCONFIRMED, pending Kyle] The zone count and the assumption
-# of uniform zone height were read visually from a zx slice plot of the
-# reference MCNP model — see the tagging block in materials.py, which owns
-# N_AXIAL_ZONES. Nothing here is [TECDOC].
+# The zone COUNTS and their provenance live in materials.py, which owns
+# N_X_ZONES and N_AXIAL_ZONES; read the tagging block there before changing
+# anything here. In short: 2 x 10 is [MCNP — Kyle confirmed 2026-08-12], it
+# supersedes both an [ASSUMED] 8 x 20 and an unconfirmed [MCNP-VISUAL] reading
+# of 5 axial zones, and it is NOT the 8-per-half-core of [TECDOC-643 App. A-2,
+# Sec. 3.1]. Kyle's answer confirms the per-plate SUBDIVISION only — the sharing
+# of one material across all plates of an element remains unconfirmed.
+# Nothing in THIS block is [TECDOC] or [MCNP]; every value here is [DERIVED]
+# from MEAT_WIDTH / MEAT_HEIGHT and the counts.
 #
-# The zone bounds are derived from the ACTIVE MEAT planes themselves (reading
-# .z0 off the existing shared surfaces), NOT from ELEM_Z. ELEM_Z is the element
-# extent, and since B1 the two HAVE diverged (62 cm element vs 60 cm meat);
-# zones derived from ELEM_Z would tile 62 cm and silently mis-size every
-# depletion volume. The tiling assert below tests the quantity that matters.
+# The zone bounds are derived from the ACTIVE MEAT extents themselves, NOT from
+# the element envelope. ELEM_Z is the element extent, and since B1 the two HAVE
+# diverged (62 cm element vs 60 cm meat); zones derived from ELEM_Z would tile
+# 62 cm and silently mis-size every depletion volume. The same trap exists in x
+# — ELEM_X is 7.6 and ACTIVE_STACK_X is 6.64, neither of which is the 6.3 cm
+# meat. The tiling asserts below test the quantities that matter, in both
+# directions.
+#
+# y (the plate stacking direction) is NOT subdivided — each plate is a single
+# meat band in y. Every plate does, however, carry its OWN materials: cells and
+# depletable materials are 1:1 [MCNP — Kyle confirmed 2026-08-12]. The former
+# element-shared scheme was the last [MCNP-VISUAL] inference and is retired.
 #
 # Zoning is opt-in (build_core_geometry(depletion_zoning=True)). With it off,
 # none of these surfaces are created and the model is unchanged.
@@ -360,33 +372,65 @@ _z_model_bot    = openmc.ZPlane(z0=CORE_BOTTOM)        # −90.0 cm
 MEAT_BOT_Z  = _z_fuel_bot.z0     # −30.0 cm — active meat lower bound
 MEAT_TOP_Z  = _z_fuel_top.z0     # +30.0 cm — active meat upper bound
 
+# The x meat bounds have no module-level shared surfaces to read back (unlike
+# _z_fuel_bot/_z_fuel_top): meat_left/meat_right are built per element universe.
+# These constants are therefore the SINGLE SOURCE those per-element planes are
+# built from, so the zone tiling and the element geometry cannot diverge.
+MEAT_LEFT_X  = -MEAT_WIDTH / 2.0   # −3.15 cm — active meat −x bound
+MEAT_RIGHT_X =  MEAT_WIDTH / 2.0   # +3.15 cm — active meat +x bound
+
+# Tolerance for the zone tiling asserts. Needed because MEAT_WIDTH / N_X_ZONES
+# is not generally exact in binary: at N_X_ZONES = 2 the residual happens to be
+# exactly 0 (division by a power of two), but e.g. N_X_ZONES = 3 leaves ~9e-16.
+# 1e-12 is ~3 orders of margin on the worst case measured.
+ZONE_TILE_TOL = 1e-12
+
 # MEAT_HEIGHT is a module-level primary (see the envelope block); it used to be
 # derived here off these two planes. Since B1 the plates (62 cm) and the meat
 # (60 cm) are different heights, so the derivation is inverted into a check:
 # the meat planes must still bound exactly MEAT_HEIGHT, or the zone tiling
 # below is sizing depletion volumes against the wrong stack.
-assert abs((MEAT_TOP_Z - MEAT_BOT_Z) - MEAT_HEIGHT) < 1e-12, \
+assert abs((MEAT_TOP_Z - MEAT_BOT_Z) - MEAT_HEIGHT) < ZONE_TILE_TOL, \
     "active meat planes do not bound MEAT_HEIGHT"
+assert abs((MEAT_RIGHT_X - MEAT_LEFT_X) - MEAT_WIDTH) < ZONE_TILE_TOL, \
+    "active meat x bounds do not span MEAT_WIDTH"
 
-MEAT_ZONE_HEIGHT           = MEAT_HEIGHT / N_AXIAL_ZONES    # 12.0 cm for N=5
-MEAT_ZONE_VOLUME_PER_PLATE = MEAT_THICK * MEAT_WIDTH * MEAT_ZONE_HEIGHT
+MEAT_ZONE_HEIGHT = MEAT_HEIGHT / N_AXIAL_ZONES   # 6.0 cm  for N_AXIAL_ZONES=10
+MEAT_ZONE_WIDTH  = MEAT_WIDTH  / N_X_ZONES       # 3.15 cm for N_X_ZONES=2
 
-assert abs((MEAT_BOT_Z + N_AXIAL_ZONES * MEAT_ZONE_HEIGHT) - MEAT_TOP_Z) < 1e-12, \
+# 2D zone volume for ONE plate: width x height x the meat thickness. Every plate
+# carries the same meat thickness (outer plates are clad at CLAD_THICK_OUTER on
+# both faces, inner at CLAD_THICK_INNER, and both leave exactly MEAT_THICK), so
+# one constant is valid for all 614 plates.
+MEAT_ZONE_VOLUME_PER_PLATE = MEAT_THICK * MEAT_ZONE_WIDTH * MEAT_ZONE_HEIGHT
+
+assert abs((MEAT_BOT_Z + N_AXIAL_ZONES * MEAT_ZONE_HEIGHT) - MEAT_TOP_Z) < ZONE_TILE_TOL, \
     "axial zones do not tile the active meat height"
+assert abs((MEAT_LEFT_X + N_X_ZONES * MEAT_ZONE_WIDTH) - MEAT_RIGHT_X) < ZONE_TILE_TOL, \
+    "x zones do not tile the active meat width"
 
 # Interior zone dividers, created ONCE and reused across all 28 fueled element
 # universes — never inside the per-element builder, which would put
-# (N_AXIAL_ZONES-1) x 28 coincident redundant planes in the model.
+# (N-1) x 28 coincident redundant planes in the model. Both element types use
+# the same MEAT_WIDTH, so one set of x planes serves standard and control alike.
 #
 # Created lazily rather than at import: module-level surface construction
 # consumes the global auto-ID counter and would shift every subsequent surface
 # ID, so the zoning-OFF model would stop being byte-for-byte identical to the
 # Phase One baseline.
-_FUEL_ZONE_PLANES = None
+#
+# NOTE THE ASYMMETRY between the two directions below. In z the OUTER bounds are
+# module-level shared surfaces (_z_fuel_bot/_z_fuel_top), so zone_z_bounds() can
+# reuse them itself. In x there is no module-level meat surface — meat_left and
+# meat_right are local to each element builder — so zone_x_bounds() takes them
+# as arguments. Hoisting them to module level would shift the surface auto-ID
+# counter and break the zoning-OFF baseline.
+_FUEL_ZONE_PLANES   = None
+_FUEL_ZONE_X_PLANES = None
 
 
 def fuel_zone_planes():
-    """The N_AXIAL_ZONES-1 interior zone ZPlanes (−18, −6, +6, +18 for N=5)."""
+    """The N_AXIAL_ZONES-1 interior zone ZPlanes (−24, −18, … +24 for N=10)."""
     global _FUEL_ZONE_PLANES
     if _FUEL_ZONE_PLANES is None:
         _FUEL_ZONE_PLANES = [
@@ -394,6 +438,23 @@ def fuel_zone_planes():
             for k in range(1, N_AXIAL_ZONES)
         ]
     return _FUEL_ZONE_PLANES
+
+
+def fuel_zone_x_planes():
+    """The N_X_ZONES-1 interior zone XPlanes (a single plane at 0 for N=2).
+
+    At an even N_X_ZONES one of these lands exactly on the meat centreline
+    x = 0. No other surface in this model sits at x0 = 0 — every XPlane built
+    anywhere in this file is one of a ± symmetric pair — so the centreline
+    plane is coincident with nothing.
+    """
+    global _FUEL_ZONE_X_PLANES
+    if _FUEL_ZONE_X_PLANES is None:
+        _FUEL_ZONE_X_PLANES = [
+            openmc.XPlane(x0=MEAT_LEFT_X + j * MEAT_ZONE_WIDTH)
+            for j in range(1, N_X_ZONES)
+        ]
+    return _FUEL_ZONE_X_PLANES
 
 
 def zone_z_bounds(k):
@@ -405,6 +466,20 @@ def zone_z_bounds(k):
     planes = fuel_zone_planes()
     return (_z_fuel_bot if k == 0 else planes[k - 1],
             _z_fuel_top if k == N_AXIAL_ZONES - 1 else planes[k])
+
+
+def zone_x_bounds(j, meat_left, meat_right):
+    """(lower, upper) XPlane surfaces bounding width zone j.
+
+    zone 0 = −x edge (x = MEAT_LEFT_X). `meat_left`/`meat_right` are the calling
+    element's OWN meat edge planes and are reused for the outermost bounds, so
+    no duplicate surface is made at ±3.15 — the x analogue of what zone_z_bounds
+    does with the shared ±30 planes. See the asymmetry note above for why they
+    have to be passed in rather than read from module scope.
+    """
+    planes = fuel_zone_x_planes()
+    return (meat_left  if j == 0 else planes[j - 1],
+            meat_right if j == N_X_ZONES - 1 else planes[j])
 
 
 
@@ -426,18 +501,17 @@ def make_standard_fuel_element(elem_id, element_id=None, zoned=False):
 
     elem_id     integer index, unchanged — drives every cell name.
     element_id  core-map position label ('B4', ...) — depletion zoning only.
-    zoned       when True, each plate's meat is split into N_AXIAL_ZONES
-                stacked cells sharing one material per zone across all plates
-                of this element. When False the element is built exactly as it
-                always has been.
+    zoned       when True, each plate's meat is split into
+                N_X_ZONES x N_AXIAL_ZONES cells on an (x, z) grid, each cell
+                filled by its OWN depletable material — cells and materials are
+                1:1 and nothing is shared between plates. When False the element
+                is built exactly as it always has been.
     """
     if zoned and element_id is None:
         raise ValueError("zoned=True requires a core-map element_id label")
 
-    # One material per axial zone, shared by all 23 plates of this element.
-    zone_mats = ([make_zoned_fuel(element_id, k,
-                                  N_PLATES_STD * MEAT_ZONE_VOLUME_PER_PLATE)
-                  for k in range(N_AXIAL_ZONES)] if zoned else None)
+    # Zoned materials are created per PLATE, inside the plate loop below, where
+    # the plate index is in scope — one material per meat cell, nothing shared.
 
     # Pitch cell boundaries
     pitch_left  = openmc.XPlane(x0=-PITCH_X / 2.0)
@@ -455,9 +529,10 @@ def make_standard_fuel_element(elem_id, element_id=None, zoned=False):
     side_inner_left  = openmc.XPlane(x0=-ELEM_X / 2.0 + SIDE_PLATE_THICK)
     side_inner_right = openmc.XPlane(x0= ELEM_X / 2.0 - SIDE_PLATE_THICK)
 
-    # Fuel meat X boundaries
-    meat_left  = openmc.XPlane(x0=-MEAT_WIDTH / 2.0)
-    meat_right = openmc.XPlane(x0= MEAT_WIDTH / 2.0)
+    # Fuel meat X boundaries — built from the module-level constants so the zone
+    # tiling in zone_x_bounds() and this element's geometry share one source.
+    meat_left  = openmc.XPlane(x0=MEAT_LEFT_X)
+    meat_right = openmc.XPlane(x0=MEAT_RIGHT_X)
 
     # Axial bounds — reuse module-level surfaces (avoids redundant surface IDs).
     # meat_z* bound the fuel meat only (+/-30); plate_z bounds the plates and
@@ -503,7 +578,11 @@ def make_standard_fuel_element(elem_id, element_id=None, zoned=False):
         meat_top    = openmc.YPlane(y0=y + plate_thick - clad_top)
 
         # Meat: bounded in x, y, AND z (active zone only)
-        meat_xy = +meat_left & -meat_right & +meat_bottom & -meat_top
+        # meat_y is the y band alone. Zone cells substitute their own x bounds
+        # for meat_left/meat_right rather than intersecting on top of them, so a
+        # zone cell carries the same 6 half-spaces an unzoned meat cell does.
+        meat_y  = +meat_bottom & -meat_top
+        meat_xy = +meat_left & -meat_right & meat_y
         meat_region = meat_xy & +meat_zbot & -meat_ztop
 
         # Plate region bounded to active zone
@@ -514,16 +593,20 @@ def make_standard_fuel_element(elem_id, element_id=None, zoned=False):
         )
 
         if zoned:
-            # One cell per axial zone. The clad cell below still subtracts the
-            # FULL meat_region, so the zone cells tile the same volume the
+            # One cell per (x, z) zone, and one MATERIAL per cell — plate i gets
+            # its own, shared with nothing. The clad cell below still subtracts
+            # the FULL meat_region, so the zone cells tile the same volume the
             # single meat cell occupied — no gap, no overlap.
-            for k in range(N_AXIAL_ZONES):
-                z_lo, z_hi = zone_z_bounds(k)
-                cells.append(openmc.Cell(
-                    name=f'std{elem_id}_meat_{i}_z{k}',
-                    fill=zone_mats[k],
-                    region=meat_xy & +z_lo & -z_hi
-                ))
+            for j in range(N_X_ZONES):
+                x_lo, x_hi = zone_x_bounds(j, meat_left, meat_right)
+                for k in range(N_AXIAL_ZONES):
+                    z_lo, z_hi = zone_z_bounds(k)
+                    cells.append(openmc.Cell(
+                        name=f'std{elem_id}_meat_{i}_x{j}_z{k}',
+                        fill=make_zoned_fuel(element_id, i, j, k,
+                                             MEAT_ZONE_VOLUME_PER_PLATE),
+                        region=+x_lo & -x_hi & meat_y & +z_lo & -z_hi
+                    ))
         else:
             cells.append(openmc.Cell(
                 name=f'std{elem_id}_meat_{i}',
@@ -846,19 +929,22 @@ def make_control_fuel_element(elem_id, withdrawn_fraction=0.0,
     elem_id     integer index, unchanged — drives every cell name.
     element_id  core-map position label ('C2', ...) — depletion zoning only.
     zoned       when True, each follower plate's meat is split into
-                N_AXIAL_ZONES stacked cells sharing one material per zone
-                across all 17 plates. The absorber slot lives in a different
-                y-band than the meat (see the slot/meat disjointness note in
-                the follower section below), so the axial cut never touches
-                the blade, its slot, or the sliding-cap logic.
+                N_X_ZONES x N_AXIAL_ZONES cells on an (x, z) grid, each cell
+                filled by its OWN depletable material — cells and materials are
+                1:1, nothing shared between the 17 follower plates. The
+                absorber slot lives
+                in a different y-band than the meat (see the slot/meat
+                disjointness note in the follower section below), so neither the
+                axial nor the width cut touches the blade, its slot, or the
+                sliding-cap logic. The x cut stays inside the meat, which is
+                MEAT_WIDTH (6.3) wide against the ABSORBER_WIDTH (6.63) blade,
+                so it cannot reach the blade in x either.
     """
     if zoned and element_id is None:
         raise ValueError("zoned=True requires a core-map element_id label")
 
-    # One material per axial zone, shared by all 17 follower plates.
-    zone_mats = ([make_zoned_fuel(element_id, k,
-                                  N_CTRL_FUEL_PLATES * MEAT_ZONE_VOLUME_PER_PLATE)
-                  for k in range(N_AXIAL_ZONES)] if zoned else None)
+    # Zoned materials are created per PLATE, inside the follower plate loop
+    # below, where the plate index is in scope — one material per meat cell.
 
     f = withdrawn_fraction
     z_bot = -HALF_Z + f * ROD_TRAVEL   # blade bottom
@@ -908,8 +994,8 @@ def make_control_fuel_element(elem_id, withdrawn_fraction=0.0,
     # Fuel meat x/z bounds
     meat_zbot  = _z_fuel_bot
     meat_ztop  = _z_fuel_top
-    meat_left  = openmc.XPlane(x0=-MEAT_WIDTH / 2.0)
-    meat_right = openmc.XPlane(x0= MEAT_WIDTH / 2.0)
+    meat_left  = openmc.XPlane(x0=MEAT_LEFT_X)
+    meat_right = openmc.XPlane(x0=MEAT_RIGHT_X)
 
     # Y-layout — fuel stack is centered, half-width fixed by the standard
     # 0.127/0.219 pitch (CTRL_FUEL_STACK_HALF, module level).
@@ -1143,9 +1229,12 @@ def make_control_fuel_element(elem_id, withdrawn_fraction=0.0,
         meat_t = openmc.YPlane(y0=plate_top - CLAD_THICK_INNER)
         # The meat y-band lies inside the follower stack [-2.8315, +2.8315];
         # the absorber slots sit at |y| in [3.3165, 3.6265], outside it. Meat and
-        # absorber slot are disjoint in y, so the axial zone cut below cannot
+        # absorber slot are disjoint in y, so the zone cuts below cannot
         # interact with the blade cells or the not_slots complement.
-        meat_xy = +meat_b & -meat_t & +meat_left & -meat_right
+        # meat_y is the y band alone — see the standard-element note on why the
+        # zone cells substitute their x bounds rather than intersecting them.
+        meat_y  = +meat_b & -meat_t
+        meat_xy = meat_y & +meat_left & -meat_right
         meat_region = meat_xy & +meat_zbot & -meat_ztop
         clad_region = (
             +plate_bot_s & -plate_top_s &
@@ -1154,15 +1243,19 @@ def make_control_fuel_element(elem_id, withdrawn_fraction=0.0,
             ~meat_region
         )
         if zoned:
-            # One cell per axial zone; clad_region still subtracts the FULL
-            # meat_region, so the zone cells tile exactly what the single meat
-            # cell occupied.
-            for k in range(N_AXIAL_ZONES):
-                z_lo, z_hi = zone_z_bounds(k)
-                cells.append(openmc.Cell(
-                    name=f'ctrl{elem_id}_meat_{i}_z{k}',
-                    fill=zone_mats[k],
-                    region=meat_xy & +z_lo & -z_hi))
+            # One cell per (x, z) zone, and one MATERIAL per cell — follower
+            # plate i gets its own, shared with nothing. clad_region still
+            # subtracts the FULL meat_region, so the zone cells tile exactly
+            # what the single meat cell occupied.
+            for j in range(N_X_ZONES):
+                x_lo, x_hi = zone_x_bounds(j, meat_left, meat_right)
+                for k in range(N_AXIAL_ZONES):
+                    z_lo, z_hi = zone_z_bounds(k)
+                    cells.append(openmc.Cell(
+                        name=f'ctrl{elem_id}_meat_{i}_x{j}_z{k}',
+                        fill=make_zoned_fuel(element_id, i, j, k,
+                                             MEAT_ZONE_VOLUME_PER_PLATE),
+                        region=meat_y & +x_lo & -x_hi & +z_lo & -z_hi))
         else:
             cells.append(openmc.Cell(
                 name=f'ctrl{elem_id}_meat_{i}', fill=fuel, region=meat_region))
@@ -1605,10 +1698,13 @@ def build_core_geometry(withdrawn_fraction=1.0, depletion_zoning=False):
     f = 0.0 → blades fully INSERTED  (absorber spans z=[-30, +30])
     f = 1.0 → blades fully WITHDRAWN (absorber spans z=[+30, +90])
 
-    depletion_zoning=True splits every fuel meat cell into N_AXIAL_ZONES axial
-    cells, one depletable material per element per zone (28 x N materials, all
-    starting from the identical base fuel composition). Structural scaffolding
-    for a later depletion study — it configures nothing about depletion itself.
+    depletion_zoning=True splits every fuel meat cell on an (x, z) grid into
+    N_X_ZONES x N_AXIAL_ZONES cells, one depletable material PER CELL
+    (614 x N_X_ZONES x N_AXIAL_ZONES materials — the same formula as the cell
+    count, since the two are 1:1 — all starting from the identical base fuel
+    composition). At the 2 x 10 default that is 12,280 meat cells and 12,280
+    materials. Structural scaffolding for a later depletion study — it
+    configures nothing about depletion itself.
     Default False: the Phase One fresh-core cross-validation baseline must not
     move. With it off the model is byte-for-byte what it has always been.
 

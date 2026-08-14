@@ -8,29 +8,96 @@ hatch table, thresholds and pair declarations that the figures are drawn with.
 Two copies of a palette is how a legend starts disagreeing with its own figure.
 
 =============================================================================
-HOW THE PALETTE WAS DERIVED
+HOW THE PALETTE WAS DERIVED  (rebuilt 2026-08-13)
 =============================================================================
-Luminance was solved FIRST, as a pure constraint problem, with hue and
-saturation assigned afterwards over the fixed values.
+Luminance is solved FIRST as a pure constraint problem; hue and saturation are
+assigned afterwards over the fixed values. Rebuilt from scratch when fig3 gained
+a second panel and the old palette's per-figure reasoning collapsed.
 
-The constraint set is PER FIGURE, not global: no figure contains all eight
-regions, and regions that never co-occur need not separate at all. Co-occurrence
-is derived by sampling the built geometry (see check_figures.derive_cooccurrence),
-never hand-declared. fig2 binds with 7 regions; end_box and graphite never share
-a figure, so the effective level count is 7 and the even-spacing ceiling is
-0.910 / 6 = 0.1517.
+*** HARD CONSTRAINT -- READ BEFORE ADDING A REGION ***
 
-An LP over every ordering maximises the all-pairs floor subject to each
-co-occurring adjacent pair clearing VALUE_MIN. Among the 18720 solutions that
-reach the optimum, the one closest to a semantic target (water light, metals
-mid, absorber dark) was chosen. Those semantics came back on their own: they
-were NOT constraints. Solving one global 8-region ramp instead gives only
-0.1245, because it forces regions apart that never meet.
+    EIGHT regions occupy SEVEN luma levels, evenly spaced 0.15333 apart across
+    [0.04, 0.96]. The ladder is PINNED. There is no freedom left in it.
 
-Result: every pair in every figure clears 0.15 by VALUE alone, so nothing is
-colour-only and the palette survives greyscale conversion. Fuel meat is the only
-strongly saturated region, so it reads as the subject wherever it sits in the
-value ramp.
+    Eight DISTINCT levels are arithmetically impossible: 8 levels at VALUE_MIN
+    = 0.15 need 7 * 0.15 = 1.05 of span, and luma is bounded by [0, 1]. No
+    palette, no solver and no colour choice can produce it. That is why clad
+    and structural_Al are merged onto one level (see EXEMPT_PAIRS below).
+
+    A NINTH REGION CANNOT BE ADDED WITHOUT ANOTHER MERGE. Seven levels already
+    consume 6 * 0.15333 = 0.92 of the 0.92 usable span. Adding a level means
+    finding two more regions that can honestly share one, or lowering
+    VALUE_MIN, which is not a decision to take quietly.
+
+    This is not "no figure contains all eight regions" any more. The previous
+    derivation leaned on that, and it stopped being true: co-occurrence is now
+    effectively complete across the figure set, so the constraint is global.
+
+WHY [0.04, 0.96] AND NOT [0.05, 0.95]
+
+The natural-looking ladder -- 0.05 to 0.95, exactly 0.15 apart, zero headroom --
+DOES NOT SURVIVE 8-BIT QUANTISATION. It was built and measured first, and all
+five interior gaps landed short: 0.1485, 0.1499, 0.1485, 0.1499, 0.1499. A
+1-LSB step in green moves luma by 0.587/255 = 0.0023, and a ladder with zero
+headroom has nothing to absorb it with. It would have looked perfectly correct
+written down as a specification and failed every gap when rendered.
+
+[0.04, 0.96] gives 0.15333 nominal spacing, so every achieved gap clears 0.15
+with about +0.0017 to spare -- roughly one LSB of green. That margin is the
+entire reason the ladder is representable. Do not narrow the band.
+
+THE LADDER, lightest to darkest
+
+    0.9600  pool water 294 K      very light blue; the pool is background and
+                                  should recede
+    0.8067  clad | structural_Al  ONE level, two hues: clad cool, structural a
+                                  faintly warm neutral. See EXEMPT_PAIRS.
+    0.6533  end box homogenate    warm grey-tan -- reads as a mixture, neither
+                                  metal nor water
+    0.5000  U3Si2-Al fuel meat    the only strongly saturated region (S = 0.72);
+                                  the subject, and the first thing the eye lands
+                                  on in every figure
+    0.3467  coolant water 316.8 K mid blue, same hue family as pool water,
+                                  separated from it by value alone
+    0.1933  B4C absorber          dark teal-green, MTR convention
+    0.0400  graphite reflector    WARM near-black, not a neutral one
+
+GRAPHITE IS TINTED, AND IT CANNOT BE LIGHTENED
+
+A dead-neutral #0A0A0A read as a harsh black. It is warmed to #0D0A08 instead:
+a warm near-black reads softer than a neutral one at the same luminance, and it
+buys hue separation from the teal B4C directly above it.
+
+Warmed, NOT lightened, because it cannot be lightened. Graphite is the darkest
+level and the only pair constraining it is B4C, so its ceiling is
+0.1930 - 0.15 = 0.0430 -- a total lift of 0.0038 from where it sits, roughly one
+8-bit step. A genuine soft charcoal is luma 0.08 to 0.16, which would force B4C
+to 0.23+ against its own ceiling of coolant - 0.15 = 0.1968. Infeasible without
+moving every level, and shifting the whole ladder up by 0.04 puts pool water at
+0.998, which is page white.
+
+If a soft charcoal is ever actually wanted, the ONLY way to get one without
+re-solving is to swap graphite and B4C between these two levels: graphite takes
+0.193 as a true matte charcoal and B4C takes 0.040 as a near-black green. That
+is arguably the more faithful pair -- reactor graphite is matte dark grey and
+B4C is black -- and it was offered and declined on 2026-08-13, because it makes
+B4C the darkest thing in every figure that carries it.
+
+DESIGN INTENT, in priority order: faithful before pretty (aluminium silver,
+water blue, graphite black-grey, fuel warm); the two waters read as one family
+split by value, likewise the two aluminiums; fuel meat is the only saturated
+warm region; the two darks (B4C, graphite) split by HUE as well as value,
+because 0.15 at the dark end is perceptually tighter than 0.15 at the light end.
+
+structural_Al is a faintly warm NEUTRAL (S = 0.05) rather than a tan. At a
+definite tan it landed on hue 0.092 against end_box's 0.092 -- the same hue at
+the ladder's minimum value gap, which is the weakest pair a palette can have.
+Dropping its chroma separates the two by saturation as well as value, and
+neutral silver is the more faithful reading of structural aluminium anyway.
+
+Result: every non-exempt pair clears VALUE_MIN by VALUE ALONE, so nothing is
+colour-only and the palette survives greyscale conversion. The tightest is
+clad/end_box at 0.1517, and it separates on hue too (0.581 vs 0.092).
 
 =============================================================================
 LUMINANCE METRIC
@@ -189,15 +256,41 @@ def check_type_sizes():
 # =============================================================================
 
 REGION_FILL = {
-    'pool_water':     '#007BFF',
-    'clad':           '#C8D8EE',
-    'structural_Al':  '#A1B2C5',
-    'meat':           '#EC6053',
-    'coolant':        '#000080',
-    'graphite':       "#030303",
-    'end_box':        '#0D4870',
-    'B4C':            '#2E8B57',
+    'pool_water':     '#EDF7FF',   # 0.9605  very light blue -- recedes
+    'clad':           '#BED1E3',   # 0.8054  silver-grey, cool cast
+    'structural_Al':  '#D2CDC7',   # 0.8071  silver-grey, faintly warm neutral
+    'meat':           '#DA5E3D',   # 0.4993  the only saturated warm region
+    'coolant':        '#32628C',   # 0.3468  mid blue, pool-water family
+    'graphite':       '#0D0A08',   # 0.0418  warm near-black, see below
+    'end_box':        '#B5A48F',   # 0.6537  warm grey-tan, a mixture
+    'B4C':            '#074635',   # 0.1930  dark teal-green, MTR convention
 }
+
+# =============================================================================
+# THE ALUMINIUM MERGE -- a DECLARED exemption, listed by the checker, never
+# silently skipped.
+# =============================================================================
+# clad and structural_Al share one luma level and separate by HUE ALONE. In
+# greyscale they are one tone, deliberately.
+#
+# The palette text above this used to exempt them on the grounds that they
+# "separate by hatch DIRECTION, not hue". That reasoning does not survive
+# contact with these figures: REGION_HATCH belongs to the vector schematic
+# path, and figures 2-4 are RASTER OpenMC renders in which no hatch is drawn at
+# all. The old palette therefore had them 0.1515 apart -- barely over the line
+# -- separating by nothing a reader can actually see, two similar grey-blues
+# that neither merged nor distinguished. One honest grey is better than two
+# greys pretending to be distinct.
+#
+# They are the same metal (Al 6061) in two roles, so merging them costs no
+# physical distinction. It also buys the one thing that makes this palette
+# possible at all -- see the HARD CONSTRAINT below.
+EXEMPT_PAIRS = {('clad', 'structural_Al')}
+
+
+def is_exempt(a, b):
+    """True if this pair is a declared same-material merge."""
+    return tuple(sorted((a, b))) in EXEMPT_PAIRS
 
 REGION_HATCH = {
     'coolant':       None,
@@ -343,15 +436,23 @@ def palette_issues(min_sep=None):
     lums = [flat_luma(k) for k in order]
     for a, b, la, lb in zip(order, order[1:], lums, lums[1:]):
         d = la - lb
+        if is_exempt(a, b):
+            notes.append(f'{a} and {b} share a luma level ({d:.4f} apart) by '
+                         f'DECLARED EXEMPTION -- same metal, two roles; they '
+                         f'separate by hue only and merge in greyscale')
+            continue
         if d < min_sep:
             notes.append(f'{a} and {b} are {d:.3f} apart in luminance '
                          f'(< {min_sep}); they will be hard to tell apart in '
                          f'greyscale if they appear in the same figure')
+    # Levels, not regions: an exempt pair is one level carrying two fills, so
+    # counting regions here would demand span the ladder does not need.
+    n_levels = len(order) - len(EXEMPT_PAIRS)
     span = lums[0] - lums[-1]
-    need = min_sep * (len(order) - 1)
+    need = min_sep * (n_levels - 1)
     if span < need:
         notes.append(f'the palette spans {span:.3f} in luminance but '
-                     f'{len(order)} regions at {min_sep} apart need {need:.3f}; '
+                     f'{n_levels} levels at {min_sep} apart need {need:.3f}; '
                      f'some pairs must overlap unless they never share a figure')
     return notes
 

@@ -2,8 +2,8 @@
 ' IAEA-TECDOC-643 Appendix A-2, generic 10 MW LEU research reactor
 ' SolidWorks external equations -- GENERATED FILE, DO NOT EDIT
 ' ========================================================================
-' Generated  2026-08-03 by figures/make_figures.py
-' Source     model/geometry.py at commit e018a6f
+' Generated  2026-08-14 by figures/make_figures.py
+' Source     model/geometry.py at commit 22ee7a0
 '
 ' REGENERATE WHENEVER model/geometry.py CHANGES:
 '     python figures/make_figures.py

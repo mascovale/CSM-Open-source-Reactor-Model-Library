@@ -59,12 +59,15 @@ class CoreConfig:
     batches:   int = 200
     inactive:  int = 50
     seed:      int | None = None          # None → OpenMC default (1)
-
-    # Depletion material zoning — segment the fuel meat into per-element,
-    # per-axial-zone depletable materials (28 elements x N_AXIAL_ZONES).
-    # Structural scaffolding only: no depletion is configured or executed.
+    
+    # Depletion material zoning — segment the fuel meat on an (x, z) grid into
+    # per-element, per-zone depletable materials
+    # (28 elements x N_X_ZONES x N_AXIAL_ZONES = 560 at the 2 x 10 default,
+    # filling 12,280 meat cells). Structural scaffolding only: no depletion is
+    # configured or executed.
     # OFF by default — the Phase One fresh-core cross-validation against the
-    # reference MCNP model must keep seeing the unchanged model.
+    # reference MCNP model must keep seeing the unchanged model. Turning it on
+    # is not free at transport time; see the COST note in materials.py.
     depletion_zoning: bool = False
 
     # Paths
@@ -88,11 +91,56 @@ class CoreConfig:
         default_factory=lambda: {'method': 'interpolation', 'default': 294.0})
 
     # ── Depletion scaffold (NOT executed in this pass) ───────────────────────
-    # TODO: ADDER-OpenMC coupling — confirm chain file, power basis, steps.
-    chain_file: str | None = None          # e.g. chain_endfb80_pwr.xml
+    # These fields RECORD intended settings. Nothing reads them: both
+    # build_depletion_operator() and run_depletion() still raise
+    # NotImplementedError. They exist so the ADDER-side configuration Kyle
+    # confirmed is on the record next to the code that will eventually consume
+    # it, not in a chat log.
+    #
+    # CHAIN FILE — still the blocker. The intent is an ENDF/B-VIII.0 depletion
+    # chain MATCHED to the ENDF/B-VIII.0 continuous-energy cross sections this
+    # model already uses (see _LOCAL_CROSS_SECTIONS). No chain file exists
+    # anywhere on this machine — not in the repo, not in ~/nuclear-data, not in
+    # ~/projects/openmc-adder — and no OPENMC_CHAIN_FILE or equivalent is set.
+    # Depletion cannot run at all until one is obtained.
+    # [MCNP/ADDER — Kyle 2026-08-12]
+    chain_file: str | None = None
     power_w: float = 10.0e6                # 10 MW nominal core power
     depletion_timesteps: list = field(default_factory=list)   # e.g. [(30, 'd'), ...]
-    depletion_integrator: str = 'predictor'                    # or 'cecm', ...
+
+    # INTEGRATOR — ADDER uses a CE/CM predictor-corrector scheme. The OpenMC
+    # equivalent is openmc.deplete.CECMIntegrator (present in the installed
+    # 0.15.3). Was 'predictor' as a placeholder; 'cecm' is the confirmed match.
+    # [MCNP/ADDER — Kyle 2026-08-12]
+    depletion_integrator: str = 'cecm'
+
+    # MATRIX EXPONENTIAL SOLVER — ADDER uses 48th-order CRAM. This is ALSO
+    # OpenMC's default (openmc.deplete.abc.Integrator has solver='cram48',
+    # 48th-order IPF CRAM), so this is a MATCH, NOT AN OVERRIDE. Set explicitly
+    # anyway so the agreement is on the record rather than incidental.
+    # [MCNP/ADDER — Kyle 2026-08-12]
+    solver: str = 'cram48'
+
+    # DEPLETION SUBSTEPS — ADDER uses 4. TWO SEPARATE PROBLEMS, both open:
+    #
+    # 1. CANNOT BE APPLIED ON THIS BUILD. OpenMC's `substeps` parameter does not
+    #    exist in the installed 0.15.3 — verified: the string appears in no file
+    #    in the installed package, and Integrator.__init__ takes only
+    #    (operator, timesteps, power, power_density, source_rates,
+    #    timestep_units, solver, continue_timesteps). Upstream, substeps was
+    #    added in 0.16.0 FOR CECMIntegrator, which is the integrator we use.
+    #    (It landed earlier, in 0.15.4, for LEQIIntegrator/SILEQIIntegrator —
+    #    noted so the bare version number is not miscopied onto CECM.) Either
+    #    way 0.15.3 predates both. Matching ADDER here requires an upgrade.
+    #
+    # 2. IT IS NOT ESTABLISHED THAT THE TWO "SUBSTEPS" ARE THE SAME OPERATION.
+    #    OpenMC's subdivides the Bateman/CRAM solve interval into identical
+    #    sub-intervals (reusing LU factorizations) with NO ADDITIONAL TRANSPORT.
+    #    Whether ADDER's substep does the same, or re-solves transport, is
+    #    UNCONFIRMED. If they differ, setting 4 on both sides is a false match
+    #    and would look like agreement while comparing different schemes.
+    #    [ASSUMED-EQUIVALENT — needs Kyle]
+    substeps: int = 4
 
 
 def resolve_cross_sections(cfg: CoreConfig) -> str:
@@ -267,13 +315,20 @@ def build_depletion_operator(model: openmc.Model, chain_file: str, **kwargs):
 
 
 def run_depletion(cfg: CoreConfig):
-    """Run a depletion sequence from the CoreConfig placeholders.
+    """Run a depletion sequence from the CoreConfig settings.
 
-    TODO: ADDER-OpenMC coupling — fill in:
-      * cfg.chain_file           (depletion chain XML for ENDF/B-VIII.0)
-      * cfg.power_w / power density basis (10 MW nominal)
-      * cfg.depletion_timesteps  (burn steps + units)
-      * cfg.depletion_integrator ('predictor', 'cecm', ...)
+    TODO: ADDER-OpenMC coupling. Settled by Kyle 2026-08-12, recorded on
+    CoreConfig, still unread by any code:
+      * cfg.depletion_integrator 'cecm'    (ADDER CE/CM predictor-corrector)
+      * cfg.solver               'cram48'  (matches OpenMC's own default)
+      * cfg.substeps             4         (NOT applicable on OpenMC 0.15.3,
+                                            and equivalence to ADDER's substep
+                                            is unconfirmed — see CoreConfig)
+    Still open:
+      * cfg.chain_file           — NO CHAIN FILE EXISTS ON THIS MACHINE. Hard
+                                   blocker; nothing can run without it.
+      * cfg.power_w / power density basis (10 MW nominal — which basis?)
+      * cfg.depletion_timesteps  (burn steps + units — none decided)
     """
     raise NotImplementedError(
         "Depletion scaffold only — not wired up in this pass. "
@@ -329,10 +384,11 @@ def main(argv=None):
     if args.overwrite_output:
         cfg.overwrite_output = True
 
-    # depletion_zoning is a real run knob and prints; the other depletion_*
-    # fields are unimplemented placeholders and stay hidden.
+    # depletion_zoning is a real run knob and prints; the other depletion
+    # fields are unimplemented records of intended settings and stay hidden.
+    # Printing them would imply this run used them; nothing reads them.
     _hidden = {'chain_file', 'power_w', 'depletion_timesteps',
-               'depletion_integrator'}
+               'depletion_integrator', 'solver', 'substeps'}
     print(f"[core] config: { {k: v for k, v in asdict(cfg).items() if k not in _hidden} }")
     run_eigenvalue(cfg)
 

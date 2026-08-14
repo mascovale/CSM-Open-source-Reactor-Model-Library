@@ -59,14 +59,24 @@ def derive_cooccurrence():
     W, H = nx * px, ny * py; Z = CORE_TOP - CORE_BOTTOM
     cx, cy = llx + W / 2, lly + H / 2
 
+    # (horizontal, vertical) axis index per basis, declared once instead of
+    # spelled out in a conditional. The previous form had no 'yz' branch: a
+    # 'yz' call fell through to the 'xy' arm and swept x/y at a fixed z --
+    # silently the wrong plane, with no error. Dormant only because every
+    # caller so far asked for 'xy' or 'xz'.
+    AXES = {'xy': (0, 1), 'xz': (0, 2), 'yz': (1, 2)}
+
     def scan(basis, origin, width, n):
+        ih, iv = AXES[basis]
         got = set()
         for i in range(n[0]):
-            u = origin[0] - width[0] / 2 + (i + .5) * width[0] / n[0]
+            u = origin[ih] - width[0] / 2 + (i + .5) * width[0] / n[0]
             for j in range(n[1]):
-                w = origin[2] - width[1] / 2 + (j + .5) * width[1] / n[1] \
-                    if basis == 'xz' else origin[1] - width[1] / 2 + (j + .5) * width[1] / n[1]
-                pt = (u, origin[1], w) if basis == 'xz' else (u, w, origin[2])
+                w = origin[iv] - width[1] / 2 + (j + .5) * width[1] / n[1]
+                pt = list(origin)
+                pt[ih] = u
+                pt[iv] = w
+                pt = tuple(pt)
                 try: seq = geom.find(pt)
                 except Exception: continue
                 for o in reversed(seq):
@@ -108,22 +118,37 @@ def test_separation(pres):
     print(f'\n  freed (never co-occur, unconstrained): {len(freed)}')
     for a, b in freed:
         print(f'    {a:14s}/{b:14s} dL={abs(L[a]-L[b]):.3f} -- separated by hue across figures')
+    # Declared same-material merges are LISTED, never silently dropped: an
+    # exemption you cannot see in the output is indistinguishable from a bug.
+    # An exempt cell is marked 'ex' in the matrix and excluded from `worst`.
+    print(f'\n  declared exemptions ({len(S.EXEMPT_PAIRS)}) -- share a luma '
+          f'level, separate by hue, merge in greyscale:')
+    for a, b in sorted(S.EXEMPT_PAIRS):
+        print(f'    EXEMPT  {a:14s}/{b:14s} dL={abs(L[a]-L[b]):.4f}  '
+              f'(same material, two roles)')
     for f in sorted(pres):
         R = sorted(pres[f]); print(f'\n  {f} N x N luminance ({len(R)} regions)')
         print('        ' + ''.join(f'{x[:7]:>9s}' for x in R))
-        worst = 9.0
+        worst = 9.0; n_ex = 0
         for a in R:
             line = f'  {a[:7]:>7s}'
             for b in R:
-                if a == b: line += '        -'
+                if a == b:
+                    line += '        -'
+                elif S.is_exempt(a, b):
+                    n_ex += 1
+                    line += '       ex'
                 else:
                     d = abs(L[a]-L[b]); worst = min(worst, d); line += f'{d:9.3f}'
             print(line)
-        print(f'    min pair {worst:.4f}  {"OK" if worst >= VALUE_MIN else "FAIL"}')
+        ex_note = f'  ({n_ex // 2} exempt pair excluded)' if n_ex else ''
+        print(f'    min pair {worst:.4f}  '
+              f'{"OK" if worst >= VALUE_MIN else "FAIL"}{ex_note}')
         if worst < VALUE_MIN:
             fail(f'{f}: min pair {worst:.4f} < {VALUE_MIN}')
-    print('\n  mechanism: every co-occurring pair separates by VALUE alone;')
-    print('  no pair is colour-only, so the palette survives greyscale.')
+    print('\n  mechanism: every co-occurring NON-EXEMPT pair separates by VALUE')
+    print('  alone, so the palette survives greyscale. The exempt pair above is')
+    print('  the one place that is deliberately not true.')
 
 
 def test_files():
@@ -132,7 +157,9 @@ def test_files():
     SPLIT = M.FIG4_SPLIT_FRAC * TW
     spec = {'fig1_core_map': (None, 0, FIG1_WIDTH_FRAC*TW),
             'fig2_core_xy': (None, 1, M.FIG2_WIDTH_FRAC*TW),
-            'fig3_axial_xz': (None, 1, FIG1_WIDTH_FRAC*TW),
+            # fig3 emits at its own content width, not FIG1_WIDTH_FRAC: its two
+            # panels are at different scales and no longer fill that measure.
+            'fig3_axial_xz': (None, 2, M.FIG3_WIDTH_FRAC*TW),
             'fig4_elements': (None, 3, TW),
             'fig4a_sfe': (None, 1, SPLIT),
             'fig4b_cfe': (None, 1, SPLIT),
@@ -144,7 +171,14 @@ def test_files():
     f2w = (c1-c0+1)*px + 2*M.FIG2_POOL_MARGIN
     f2aw = M.FIG2_WIDTH_FRAC*TW*(1-2*M.PAD_TIGHT)
     req = {'fig2_core_xy': M.required_pixels(f2w, f2aw)[2],
-           'fig3_axial_xz': M.required_pixels(nx*px, FIG1_WIDTH_FRAC*TW*0.96)[2],
+           # fig3 is two panels sharing a height; the bound is the narrower
+           # one, panel (a). Its printed width follows fig4_elements' margins
+           # (0.015 sides, 0.045 gap) rather than the 0.96 of the single-panel
+           # form. Both panels in fact exceed this -- (b) is the wider window,
+           # so it needs more pixels -- and whichever image the PDF lists first
+           # clears it.
+           'fig3_axial_xz': M.required_pixels(
+               nx*px, FIG1_WIDTH_FRAC*TW*0.925 * (nx*px)/(nx*px + ny*py))[2],
            'fig4_elements': M.required_pixels(px, (TW-2*0.015*TW-2*0.045*TW)/3)[2],
            'fig4a_sfe': sp, 'fig4b_cfe': sp, 'fig4c_ft': sp}
     print(f'    {"figure":16s} {"page pt":>9s} {"target":>9s} {"imgs":>5s} {"embedded":>14s} {"required":>9s}')

@@ -33,7 +33,7 @@ Thomas's decision, and the matched-library (ENDF/B-VII.0) work has not started.
 > | 8 | `settings.py` duplications and stale comment | **CLOSED** — `c803e08`. |
 > | 9 | Manuscript figure PDFs stale | **OPEN.** Not regenerated. |
 > | 10 | `statepoint.200.h5` predates the end-box change | **OPEN, and WORSE than the audit found.** Nothing reads it, but on 2026-08-03 it was discovered that `model.xml` and `summary.h5` in that directory were **overwritten on 2026-07-31** by a `core.build_model()` smoke test writing to `core.py`'s relative default `output_dir`. The directory is now internally inconsistent: Jul-21 results beside Jul-31 geometry. See the amendment in E4. |
-> | 11 | Non-canonical provenance tags | **PARTIAL.** `[MCNP-PROVISIONAL]` retired at `e0918c3`; the seven `[MCNP-VISUAL]` remain, pending Kyle. |
+> | 11 | Non-canonical provenance tags | **CLOSED 2026-08-12.** `[MCNP-PROVISIONAL]` retired at `e0918c3`. The seven `[MCNP-VISUAL]` are now all resolved or superseded by Kyle's 2026-08-12 answers (zone counts and material granularity) — see the amendment appended to C5. Every surviving `[MCNP-VISUAL]` string in the source sits inside a dated SUPERSEDED/RETIRED record; none is a live claim. |
 > | 12 | `CTRL_SIDE_PLATE_X` read only by a figure table | **OPEN.** Not acted on. |
 > | 13 | Open external questions | **NOW 14** — flux-trap configuration added, see the amendment in F. |
 >
@@ -284,6 +284,13 @@ Table 7.7 reference worths. These are prose, but they will silently go stale.
 | `[ASSUMED]` | 1 | geometry.py:180 (historical note inside the `FT_HOLE_RADIUS` comment) |
 | `[INFERRED]` | **0** | — |
 
+> **AMENDED 2026-08-12.** The `[MCNP-VISUAL]` counts and line numbers above are a
+> snapshot of the audit date and no longer locate anything live. All seven claims were
+> resolved or superseded on 2026-08-12; the strings that remain in `materials.py` are
+> inside dated SUPERSEDED/RETIRED records, kept deliberately as history. The tag totals
+> for `[MCNP]` also moved — `N_X_ZONES` and `N_AXIAL_ZONES` are now `[MCNP]`-backed.
+> See the amendment appended to C5.
+
 ### C2 — macro mapping
 
 | Tag | Maps to | Action |
@@ -293,11 +300,13 @@ Table 7.7 reference worths. These are prose, but they will silently go stale.
 | `[DERIVED]` | `\prvDER` | clean |
 | `[ASSUMED]` | `\prvASM` | clean — but the single occurrence is describing a *superseded* value, not tagging a live one |
 | `[DERIVED — standard channel]` | `\prvDER` + note | compound, renders if the trailing clause is dropped |
-| **`[MCNP-VISUAL]` family (7)** | **none** | **needs a fifth macro or must resolve** |
+| **`[MCNP-VISUAL]` family (7)** | **none** | **RESOLVED 2026-08-12** — see C5 amendment. No live occurrence remains, so no fifth macro is needed. The historical records inside `materials.py` are comments only and never reach the manuscript. |
 | `[INFERRED]` | **none** | named in the project rule, zero occurrences, no macro |
 
 **HYGIENE:** `[MCNP-PROVISIONAL]` was fully retired at commit `e0918c3` — zero occurrences
-remain. The `[MCNP-VISUAL]` family has exactly the same exposure and has not been addressed.
+remain. ~~The `[MCNP-VISUAL]` family has exactly the same exposure and has not been
+addressed.~~ **AMENDED 2026-08-12: the `[MCNP-VISUAL]` family is now retired too.** No live
+claim carries the tag; see the C5 amendment.
 
 ### C3 — every `[MCNP]` tag, checked individually
 
@@ -400,12 +409,49 @@ model, read by eye. Not transcribed from the model source, not confirmed by Kyle
 | all plates in an element share one zone material | materials.py:236 (`inferred`) | colours repeated across plates in the slice | If the reference model resolves per-plate, our 5 materials/element vs their 23×5 is a coarser model. Burnup gradients across the plate stack vanish. |
 | one unique material per element per zone | materials.py:237 | distinct colours per element | If materials are shared between elements, our 140 materials over-resolve — harmless for accuracy, but the material maps will not correspond one-to-one. |
 
-**Severity: OPEN, becoming BLOCKER the moment depletion results are compared.** Today
+~~**Severity: OPEN, becoming BLOCKER the moment depletion results are compared.**~~ Today
 zoning is off by default (`depletion_zoning=False`) and the Phase 1 fresh-core model does
 not touch any of it, so nothing in the current geometry depends on these being right. The
 in-code documentation of the uncertainty is unusually good — the block states plainly that
 it is unconfirmed and lists each claim separately. That is the correct handling; it just
 has not been resolved.
+
+---
+
+#### AMENDMENT 2026-08-12 — C5 IS CLOSED. All four claims resolved or superseded.
+
+Kyle answered on 2026-08-12. Every claim in the table above is now settled, and the
+scheme was reimplemented to match at commit `01edb31`. **The records are kept in
+`materials.py`, dated and marked SUPERSEDED/RETIRED — history was not deleted.**
+
+| C5 claim | Disposition | Resolved by |
+|---|---|---|
+| 5 axial depletion zones | **SUPERSEDED, twice.** 5 → an `[ASSUMED]` 8 × 20 (our own placeholder resolution, never a claim about the reference) → **10 axial, `[MCNP]`** | Kyle 2026-08-12: the reference subdivides each plate **2 × 10** |
+| uniform zone height (12.0 cm) | **SUPERSEDED.** Now 6.0 cm, `[DERIVED]` from `MEAT_HEIGHT / N_AXIAL_ZONES` | same. See the residual note below |
+| all plates in an element share one zone material | **RETIRED.** Materials are now **per plate**; cells and materials are 1:1, 12,280 of each | Kyle 2026-08-12: match the reference at per-plate materials |
+| one unique material per element per zone | **SUPERSEDED** by the same change — the unit is now (element, plate, x, z), not (element, zone) | same |
+
+The audit's own prediction on the third row was right: *"If the reference model resolves
+per-plate, our 5 materials/element vs their 23×5 is a coarser model. Burnup gradients
+across the plate stack vanish."* That is exactly what it was, and exactly why it changed.
+
+**Two things this amendment does NOT claim:**
+
+1. **The 560-material scheme was never a defect.** OpenMC does not require a 1:1
+   cell-to-material mapping. Element-shared materials were valid OpenMC and a legitimate
+   modeling choice; they averaged flux across an element's plates, so intra-element burnup
+   gradients could not develop. The change was made to match the reference model, not to
+   fix a bug, and `materials.py` records that distinction.
+2. **Zone UNIFORMITY was not separately confirmed.** Kyle stated "2 × 10 on each fuel
+   plate", and a uniform division is the natural reading, which is what is implemented.
+   But non-uniform spacing was never explicitly raised or excluded in the exchange. This
+   is a small residual, not a live blocker — flagged rather than closed silently.
+
+**A new claim also arrives with this change, and it is not `[MCNP-VISUAL]`:** the
+subdivision and the granularity are both now `[MCNP — Kyle confirmed 2026-08-12]`, i.e.
+relayed statements rather than transcribed cards. That is the same provenance class as
+several existing `[MCNP]` tags (see C3) and carries the same exposure — it rests on a
+person, not a document.
 
 ### C6 — `[INFERRED]`
 
@@ -740,17 +786,17 @@ Its working tree is clean; last commit `fc180b9` (2026-07-27 15:46) by Thomas-Mc
 |---|---|---|---|---|---|
 | 1 | Graphite S(α,β) MT card | `c_Graphite` applied, 294 K | Our choice; card m00005 snippet has no MT line | **Kyle** | **Large.** Thermal scattering on a reflector materially changes the thermal spectrum. Kyle's snippet proves nothing (MCNP specifies MT separately), so this is genuinely unknown, not merely unconfirmed. |
 | 2 | Aluminium S(α,β) MT card | `c_Al27` on clad, structural Al, blade clad (330.7 K) and end-box Al (316.8 K) | 2026-07-20 meeting decision; Kyle confirmed Al gets S(α,β) | **Kyle** — both-sides change | Moderate. Reference model is also adding it; needs the same MT confirmation as graphite. |
-| 3 | Depletion zone count | `N_AXIAL_ZONES = 5` | `[MCNP-VISUAL]` — read off a zx slice image | **Kyle** | See C5. No Phase 1 impact (zoning off by default); blocks any depletion comparison. |
-| 4 | Uniform zone height | 12.0 cm | `[DERIVED, MCNP-VISUAL]` | **Kyle** | See C5. |
-| 5 | Plates share zone material | assumed yes | `[MCNP-VISUAL, inferred]` | **Kyle** | See C5. |
-| 6 | One material per element per zone | assumed yes | `[MCNP-VISUAL]` | **Kyle** | See C5. |
+| 3 | Depletion zone count | ~~`N_AXIAL_ZONES = 5`~~ → **`N_X_ZONES = 2`, `N_AXIAL_ZONES = 10`** | ~~`[MCNP-VISUAL]`~~ → **`[MCNP — Kyle confirmed 2026-08-12]`** | ~~Kyle~~ **RESOLVED 2026-08-12** | Closed. Reference subdivides each plate 2 × 10; implemented at `01edb31`. See the C5 amendment. |
+| 4 | Uniform zone height | ~~12.0 cm~~ → **6.0 cm** | ~~`[DERIVED, MCNP-VISUAL]`~~ → **`[DERIVED]`** from `MEAT_HEIGHT / N_AXIAL_ZONES` | ~~Kyle~~ **RESOLVED 2026-08-12** | Closed by the 2 × 10 answer. Residual: uniformity was the natural reading of "2 × 10", not a separately confirmed statement — see the C5 amendment. |
+| 5 | Plates share zone material | ~~assumed yes~~ → **NO — materials are per plate** | ~~`[MCNP-VISUAL, inferred]`~~ → **`[MCNP — Kyle confirmed 2026-08-12]`** | ~~Kyle~~ **RESOLVED 2026-08-12** | Closed. Cells and materials now 1:1 (12,280 each). The old scheme was valid OpenMC and a modeling choice, not a bug. |
+| 6 | One material per element per zone | ~~assumed yes~~ → **superseded: one material per (element, plate, x, z)** | ~~`[MCNP-VISUAL]`~~ → **`[MCNP — Kyle confirmed 2026-08-12]`** | ~~Kyle~~ **RESOLVED 2026-08-12** | Closed by the same change as row 5. |
 | 7 | Outer-pool water H-1 / O-16 | H-1 6.669090E-02 | OpenMC vs MCNP 6.673560E-02 — **0.067 %, outside the 0.010 % tolerance** | **Kyle / decision** | **Raised by B4.** This material now fills the entire 38.5 cm pool on all four sides instead of a one-cell ring, so its weight in the model is far greater than when the discrepancy was logged. No decision on record. |
 | 8 | `c_Al27` on ENDF/B-VII.0 | assumed present, switch exists | VIII.0 grid is [20, 80, 294, 400, 600, 800] K; VII.0 unknown | **VII.0 library access** | **Load-bearing.** If VII.0 lacks `c_Al27`, `USE_AL_SAB` must be off for the matched run — the switch becomes mandatory, not optional. Cannot be checked here: `/opt/openmc-data/mcnp_endfb70/cross_sections.xml` **does not exist on this machine** (only VIII.0 and Lib80x under `~/nuclear-data`). |
 | 9 | `C0` vs `C12`/`C13` on VII.0 | `add_element('C')` → C12/C13 | VII.0 carries natural carbon only; the split arrived in VII.1 | **VII.0 library access** | Model will fail to build, or silently resolve differently. `run_vii_mat.py:20` already has the env-keyed switch; `materials.py` has the `USE_NATURAL_CARBON` branch. |
 | 10 | `run_vii_mat.py` rewrite | not started | Independent material definitions, stale on three counts | **Scheduling** | **VII.0 blocker.** See E1. |
 | 11 | MCNP-side rows "will be updated" | unfueled plate 0.150 → 0.127; homogenized region X/Y 7.600/8.000 → 7.700/8.100 | Kyle stated the reference model is the incorrect side | **Kyle's edit** | Our side is already correct and must **not** be changed to match. Until Kyle's edit lands, those rows will read as mismatches. |
 | 12 | MCNP-to-OpenMC conversion tool | unknown | Task 3, never named | **Kyle / project** | Out of Phase 1 scope; recorded because it was never confirmed. |
-| 13 | ADDER depletion integrator | unknown | Task 4; `core.py:216` lists it as a `cfg` placeholder | **Task 4** | Out of Phase 1 scope. |
+| 13 | ADDER depletion integrator | ~~unknown~~ → **CE/CM predictor-corrector (`cecm`), CRAM48 solver, 4 substeps** | **`[MCNP/ADDER — Kyle 2026-08-12]`**, recorded as dormant `CoreConfig` fields | ~~Task 4~~ **PARTIALLY RESOLVED 2026-08-12** | Settings known; **still blocked on two things** — no depletion chain file exists on this machine, and OpenMC `substeps` needs 0.16.0 for `CECMIntegrator` (this machine runs 0.15.3). Whether ADDER's "substep" is the same operation as OpenMC's is `[ASSUMED-EQUIVALENT — needs Kyle]`. |
 | 14 | `CTRL_OUTER_OFFSET` 0.1305 vs the model as it stands today | 0.1305 `[MCNP]` | Kyle supplied directly; said the model "either already carries it or will be updated to it" | **Kyle's confirmation** | Low. Recorded in-code that the value may postdate the reference model, so a future surface-card diff could disagree without either side being wrong. |
 | 15 | **Which flux-trap configuration is the benchmark** | D4 (centre) + A6 (edge), pinned by assert at `geometry.py:1483` | A-2 §1, "one water-filled flux trap near the centre of the core, another near an edge". `PROJECT_BIBLE.md` §5 asked Kyle to confirm A-2 Table 1 vs the Chapter 7 / Appendix G treatment, which differ. **No answer was ever recorded**, and the question was not carried forward into Testament II. | **Kyle** | **Low for the model, real for the manuscript.** The core layout is MATCH against the reference MCNP model on every count — 23 standard, 5 control, 2 flux traps, 12 graphite — so the geometry is correct whichever TECDOC section is authoritative. But the manuscript will cite TECDOC for that layout, and citing the section that describes a *different* configuration is a reviewer catch. |
 
@@ -766,9 +812,15 @@ Complete list, whole repository:
 | `model/core.py:213` | `TODO: ADDER-OpenMC coupling — fill in chain_file, power_w, timesteps, integrator` | Task 4 |
 | `model/core.py:221` | `raise NotImplementedError("… TODO: ADDER-OpenMC coupling.")` | Task 4 |
 | `model/core.py:131` | `# … Verify that rather than assume it: a base-fuel …` | internal note, not a blocker |
-| `model/materials.py:230` | `[MCNP-VISUAL — UNCONFIRMED, pending Kyle]` | Kyle (C5) |
-| `model/materials.py:249` | `N_AXIAL_ZONES = 5  # [MCNP-VISUAL — UNCONFIRMED, pending Kyle]` | Kyle (C5) |
-| `model/geometry.py:276` | `[MCNP-VISUAL — UNCONFIRMED, pending Kyle]` | Kyle (C5) |
+| ~~`model/materials.py:230`~~ | ~~`[MCNP-VISUAL — UNCONFIRMED, pending Kyle]`~~ | **RETIRED 2026-08-12** |
+| ~~`model/materials.py:249`~~ | ~~`N_AXIAL_ZONES = 5  # [MCNP-VISUAL — UNCONFIRMED, pending Kyle]`~~ | **RETIRED 2026-08-12** |
+| ~~`model/geometry.py:276`~~ | ~~`[MCNP-VISUAL — UNCONFIRMED, pending Kyle]`~~ | **RETIRED 2026-08-12** |
+
+> **AMENDED 2026-08-12.** The `core.py` line numbers in the rows above have drifted by
+> ~100 lines since the audit and no longer locate the text quoted; the TODOs themselves
+> are still present and still waiting on Task 4, except the integrator/solver/substeps
+> settings, which Kyle supplied (see row 13 of the table above). The three
+> `[MCNP-VISUAL]` rows are retired outright — no live claim carries the tag.
 
 No `FIXME`, `XXX`, or `HACK` anywhere. The `VERIFY` note that used to sit on
 `FT_HOLE_RADIUS` was removed when A1 closed.

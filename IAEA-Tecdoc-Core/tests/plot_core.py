@@ -27,19 +27,67 @@ touched or overwritten):
     python tests/plot_core.py --depletion-zones
     python tests/plot_core.py --depletion-zones --color-mode element
 
-These make the per-element, per-axial-zone depletion materials visible so the
+These make the per-element, per-(x,z)-zone depletion materials visible so the
 zoning can be INSPECTED, not merely asserted. Two colour modes, catching
 different failures:
 
-  zone     (default) all elements share N colours, one per axial zone, on a
-           perceptually monotonic ramp. Every horizontal band must run unbroken
-           across the whole core — a break means one element's zones were built
-           from the wrong z-bounds.
-  element  hue = element, dark (bottom) -> light (top) within each element.
-           Adjacent columns must never share a hue — a repeat means two
+  zone     (default) all elements share one colour per (x, z) zone:
+           HUE = x index, LIGHTNESS = z index. Every horizontal band must run
+           unbroken across the whole core — a break means one element's zones
+           were built from the wrong z-bounds — and the hue sequence must run
+           in the same left-to-right order inside every element.
+  element  hue = element, saturation ramped by x, dark (bottom) -> light (top)
+           by z. Adjacent columns must never share a hue — a repeat means two
            elements share a material, or an element's zones collapsed.
 
-Everything is derived from N_AXIAL_ZONES; changing it needs no edit here.
+PLATES ARE NOT DISTINGUISHABLE IN THESE VIEWS — READ THIS BEFORE TRUSTING THEM.
+Depletion materials are per PLATE (614 x N_X_ZONES x N_AXIAL_ZONES = 12,280 at
+the default), but colour is keyed only on (element, x, z). Every plate of an
+element therefore shares its neighbours' colour within a given zone. Encoding
+plate as well would need 460 shades inside one element hue — illegible, and it
+would destroy the gradient reading these views exist for. The consequence is
+that NOTHING HERE VERIFIES THE PER-PLATE SPLIT. That verification lives in the
+1:1 structural check in tests/check_depletion_zoning.py — material count ==
+meat cell count, every cell a distinct material, and set equality against
+get_zoned_fuels(). These figures check zone CONTINUITY and ORDERING, nothing
+about plate granularity.
+
+NO CATEGORICAL LEGEND. There are N_X_ZONES * N_AXIAL_ZONES zones per element —
+20 at the 2 x 10 default, 160 under the superseded 8 x 20 — and 614/28 times
+that many materials. Neither count gives a legible categorical palette, and
+neither gives a usable legend. Mode "zone" therefore reads as a FIELD — you read
+gradients and continuity, not individual zones — and the key is two small
+colourbars (x index, z index) rather than patches. Same precedent as
+plot_element_hue_map, which replaced a 140-entry legend with a core map.
+
+Likewise the XY midplane panels show a DERIVED bottom/middle/top selection of
+axial zones, never all N: one panel per zone is 4.1 in x N_AXIAL_ZONES, i.e. a
+41-inch-wide figure at N_AXIAL_ZONES = 10 and 82 inches at 20.
+
+LEGIBILITY IS GUARDED, NOT ASSUMED. check_ramp_legibility() fails the run if the
+per-zone shading step falls below MIN_PERCEPTUAL_RAMP_STEP, and
+_save_zone_figure() fails if a figure grows past MAX_FIGURE_WIDTH_IN. At the
+live 2 x 10 the z step is 1.96x the threshold; the guard fires at
+N_AXIAL_ZONES >= 19 and, in mode 'element', at N_X_ZONES >= 15.
+
+THREE FIXES CONSIDERED AND DELIBERATELY NOT BUILT (2026-08-12):
+
+  * A CYCLING lightness ramp — fixed step, repeating every ~8 zones instead of
+    stretching one ramp across all N. This is the RIGHT long-term fix and is
+    what should be built IF N_AXIAL_ZONES ever needs to exceed ~18: it keeps
+    bands distinguishable at any count, trading absolute z-index readability
+    (already lost at high N) for retained band structure. Not built now because
+    it is a real design change to solve a problem at 40 axial zones, and we are
+    at 10 — confirmed against the reference model, with comfortable margin.
+  * A HARD CAP assert on N_AXIAL_ZONES. Redundant: check_ramp_legibility()
+    is the same guard expressed on the quantity that actually matters, and it
+    adapts automatically if the ramp constants change.
+  * THINNING the dashed z boundary lines at high counts (they smear into a
+    hatch above ~20 zones). Same reasoning as the cycling ramp: it only bites
+    at counts we do not use.
+
+Everything is derived from N_X_ZONES / N_AXIAL_ZONES; changing either needs no
+edit here.
 """
 
 import argparse
@@ -66,12 +114,15 @@ from geometry import (
     CTRL_OUTER_OFFSET, CTRL_AL_PLATE_THICK, CTRL_BLADE_WATER, MEAT_THICK,
     water_univ, graphite_univ, make_flux_trap,
     make_standard_fuel_element, make_control_fuel_element,
-    build_core_geometry, CORE_MAP, core_map_label,
+    build_core_geometry, CORE_MAP, CORE_MAP_COLS, core_map_label,
     MEAT_BOT_Z, MEAT_TOP_Z, MEAT_ZONE_HEIGHT,
+    MEAT_LEFT_X, MEAT_RIGHT_X, MEAT_ZONE_WIDTH,
+    N_PLATES_STD, N_CTRL_FUEL_PLATES, CTRL_ELEMENT_IDS,
+    CORE_HALF_X, CORE_HALF_Y,
 )
 from materials import (
     fuel, clad, water, water_core, b4c, graphite, aluminum, end_box_homog,
-    N_AXIAL_ZONES, get_zoned_fuels,
+    N_X_ZONES, N_AXIAL_ZONES, get_zoned_fuels,
 )
 
 # =============================================================================
@@ -370,6 +421,10 @@ CANONICAL_ELEMENTS = [core_map_label(i, j)
                       for i, row in enumerate(CORE_MAP)
                       for j, t in enumerate(row) if t in ('S', 'C')]
 N_ELEMENTS = len(CANONICAL_ELEMENTS)          # 28
+# Total fuel plates across the core — derived, never a literal. Materials are
+# per plate, so this (not N_ELEMENTS) is the material-count base.
+N_PLATES_TOTAL = sum(N_CTRL_FUEL_PLATES if e in CTRL_ELEMENT_IDS else N_PLATES_STD
+                     for e in CANONICAL_ELEMENTS)      # 614
 
 # Hue stride, coprime with 28. Sequential hues would be ~13 deg apart and
 # lattice neighbours would be indistinguishable; stride 11 throws adjacent
@@ -380,16 +435,135 @@ HUE_STRIDE = 11
 SAT_TOP,   SAT_BOT   = 0.53, 0.95
 VALUE_BOT, VALUE_TOP = 0.42, 0.95
 
+# Minimum per-zone step in an HSV ramp for adjacent zones to stay
+# distinguishable in a rendered figure. 0.03 of the 0..1 range is about 8 of
+# 255 at 8-bit output.
+#
+# THIS IS A JUDGEMENT THRESHOLD, NOT A DERIVED ONE. It comes from inspecting
+# the 2026-08-12 stress renders at N_AXIAL_ZONES = 5, 10, 20 and 40: the axial
+# bands were unmistakable at 5 and 10, borderline at 20, and gone at 40. It is
+# NOT taken from a colour-difference standard (CIEDE2000 or similar) and must
+# not be cited as one. It deliberately fires at N_AXIAL_ZONES = 20, the case
+# judged "borderline but usable" — borderline is what a guard should catch.
+#
+# At the live 2 x 10 the z step is 0.0589, about 1.96x this threshold.
+MIN_PERCEPTUAL_RAMP_STEP = 0.03
+
+# Largest figure this module will emit, in inches. Beyond this a figure is not
+# printable and is almost certainly a bug — most likely one panel per axial
+# zone instead of the derived bottom/middle/top selection, which at
+# N_AXIAL_ZONES = 20 would be 4.1 x 20 = 82 inches wide. The widest figure we
+# legitimately produce is the row-panel view at 19.2 in.
+MAX_FIGURE_WIDTH_IN = 25.0
+
+# Reserved band at the bottom of the figure for the two colour keys, in figure
+# fractions. The host axes must not extend below CBAR_BAND_TOP.
+#
+# Until 2026-08-12 the bars were placed at absolute y = 0.055 and 0.005 while
+# each figure function reserved bottom space its own way (subplots_adjust in
+# one, tight_layout(rect=...) in two others), and savefig(bbox_inches='tight')
+# then recomputed the layout again. The upper bar's title landed on top of the
+# host axes' x-axis label in EVERY figure. Stating the band once, and having
+# every caller reserve the same band, is what stops that recurring.
+CBAR_BAND_BOTTOM = 0.02
+CBAR_BAND_TOP    = 0.17
+
 
 def _to255(rgb01):
     return tuple(int(round(255 * c)) for c in rgb01[:3])
 
 
-def zone_ramp():
-    """N colours, bottom -> top, sampled at zone centres on viridis."""
-    cmap = matplotlib.colormaps['viridis']
-    return [_to255(cmap((k + 0.5) / N_AXIAL_ZONES))
-            for k in range(N_AXIAL_ZONES)]
+def _ramp_t(i, n):
+    """Position of index i within n steps, in [0, 1]. Midpoint when n == 1."""
+    return i / (n - 1) if n > 1 else 0.5
+
+
+def _ramp_step(span, n):
+    """Per-zone step of a ramp of total `span` divided into `n` zones.
+
+    A single zone has no adjacent neighbour to be confused with, so it is
+    reported as infinite rather than as a division by zero.
+    """
+    return float('inf') if n <= 1 else abs(span) / (n - 1)
+
+
+def check_ramp_legibility(mode):
+    """Fail if adjacent zones would be indistinguishable in the rendered figure.
+
+    Replaces an earlier assertion that every (element, x, z) key mapped to a
+    DISTINCT 8-bit RGB. That test guarded the wrong property: at 8 x 40 it
+    passed — 8,960 mathematically distinct colours — while the figure was
+    unreadable, because distinctness at 8-bit says nothing about whether a human
+    can tell two shades apart. This checks the quantity that actually governs
+    legibility, the size of the step between adjacent zones.
+
+    Both modes ramp VALUE over the axial zones, so the z check applies to both.
+    Mode 'element' additionally ramps SATURATION over the x zones. HUE is not
+    checked: it is far more discriminable than either, and 8 hues at 45 degrees
+    apart read cleanly in the 2026-08-12 stress renders.
+    """
+    checks = [('z', 'VALUE', 'N_AXIAL_ZONES', N_AXIAL_ZONES,
+               _ramp_step(VALUE_TOP - VALUE_BOT, N_AXIAL_ZONES))]
+    if mode == 'element':
+        checks.append(('x', 'SATURATION', 'N_X_ZONES', N_X_ZONES,
+                       _ramp_step(SAT_BOT - SAT_TOP, N_X_ZONES)))
+
+    for axis, channel, cname, n, step in checks:
+        if step < MIN_PERCEPTUAL_RAMP_STEP:
+            raise AssertionError(
+                f"{axis} zone shading is not legible in mode '{mode}': "
+                f"{cname} = {n} gives a per-zone {channel} step of "
+                f"{step:.4f} ({step * 255:.1f} of 255), below "
+                f"MIN_PERCEPTUAL_RAMP_STEP = {MIN_PERCEPTUAL_RAMP_STEP} "
+                f"(~{MIN_PERCEPTUAL_RAMP_STEP * 255:.0f} of 255). Adjacent "
+                f"{axis} zones will not be distinguishable in the rendered "
+                f"figure, so the continuity check these views exist for cannot "
+                f"be performed. Largest legible {cname} is "
+                f"{int(abs((VALUE_TOP - VALUE_BOT) if axis == 'z' else (SAT_BOT - SAT_TOP)) / MIN_PERCEPTUAL_RAMP_STEP) + 1}. "
+                f"See MIN_PERCEPTUAL_RAMP_STEP for the fix if resolution must "
+                f"rise: a cycling ramp, not a wider one.")
+        print(f"  [OK] {axis} ramp legible: {cname}={n}, {channel} step "
+              f"{step:.4f} ({step * 255:.1f}/255) >= "
+              f"{MIN_PERCEPTUAL_RAMP_STEP} "
+              f"({step / MIN_PERCEPTUAL_RAMP_STEP:.2f}x threshold)")
+
+
+def _save_zone_figure(fig, fname):
+    """Guard the figure size, save, close, return the path.
+
+    Every depletion-zone figure goes through here so the size guard has exactly
+    one home. The guard catches a figure that has grown beyond printable —
+    most plausibly a regression that emits one panel per axial zone rather than
+    the derived bottom/middle/top selection.
+    """
+    w_in, h_in = fig.get_size_inches()
+    if w_in > MAX_FIGURE_WIDTH_IN:
+        raise AssertionError(
+            f"{fname}: figure is {w_in:.1f} x {h_in:.1f} in, wider than "
+            f"MAX_FIGURE_WIDTH_IN = {MAX_FIGURE_WIDTH_IN}. This is not a "
+            f"printable figure. Check whether a panel count that should be "
+            f"derived (see zone_panel_indices) has become one-per-zone.")
+
+    out = os.path.join(OUT_DIR, fname)
+    fig.savefig(out, dpi=150, bbox_inches='tight')
+    plt.close(fig)
+    return out
+
+
+def zone_xz_rgb(j, k):
+    """Mode A, 2D: HUE from the x index, LIGHTNESS/SATURATION from the z index.
+
+    Not a categorical palette. There is no set of N_X_ZONES * N_AXIAL_ZONES
+    categorical colours that stays distinguishable; this encodes the two axes
+    separately so the plot reads as a field — hue tells you where across the
+    meat width you are, lightness how far up.
+    """
+    t = _ramp_t(k, N_AXIAL_ZONES)
+    return _to255(colorsys.hsv_to_rgb(
+        j / float(N_X_ZONES),
+        SAT_BOT + (SAT_TOP - SAT_BOT) * t,
+        VALUE_BOT + (VALUE_TOP - VALUE_BOT) * t,
+    ))
 
 
 def element_hue(idx):
@@ -397,39 +571,80 @@ def element_hue(idx):
     return ((idx * HUE_STRIDE) % N_ELEMENTS) / float(N_ELEMENTS)
 
 
-def element_zone_rgb(idx, k):
-    """Mode B: hue from the element, value/saturation ramped by zone."""
-    t = k / (N_AXIAL_ZONES - 1) if N_AXIAL_ZONES > 1 else 0.5
+def element_zone_rgb(idx, j, k):
+    """Mode B: hue from the element, saturation by x index, value by z index."""
     return _to255(colorsys.hsv_to_rgb(
         element_hue(idx),
-        SAT_BOT + (SAT_TOP - SAT_BOT) * t,
-        VALUE_BOT + (VALUE_TOP - VALUE_BOT) * t,
+        SAT_BOT + (SAT_TOP - SAT_BOT) * _ramp_t(j, N_X_ZONES),
+        VALUE_BOT + (VALUE_TOP - VALUE_BOT) * _ramp_t(k, N_AXIAL_ZONES),
     ))
 
 
-def build_zone_colors(mode):
-    """(colors_for_openmc, {(element_id, zone_index): rgb}) — deterministic.
+def zone_panel_indices():
+    """Axial zone indices to draw XY panels for — bottom, middle, top.
 
-    Keyed on (element_id, zone_index), resolved through the material NAME, so
-    the mapping never depends on dict ordering or object identity.
+    DERIVED, never all N. One panel per zone at N_AXIAL_ZONES = 20 would be a
+    figure 82 inches wide.
+    """
+    if N_AXIAL_ZONES <= 3:
+        return list(range(N_AXIAL_ZONES))
+    return [0, N_AXIAL_ZONES // 2, N_AXIAL_ZONES - 1]
+
+
+def build_zone_colors(mode):
+    """(colors_for_openmc, {(element_id, x_index, zone_index): rgb}).
+
+    COLOUR IS KEYED ON (element, x, z) — the PLATE INDEX IS DELIBERATELY NOT
+    ENCODED. Materials are per plate (614 x N_X x N_Z of them), so every plate
+    of an element shares its neighbours' colour in a given (x, z) zone. That is
+    a design choice, not an oversight: encoding plate too would need
+    N_PLATES_STD x N_X x N_Z = 460 shades inside one element hue, which is not
+    legible at any figure size and would destroy the gradient reading these
+    views exist for.
+
+    CONSEQUENCE, stated plainly: PLATES WITHIN AN ELEMENT ARE NOT VISUALLY
+    DISTINGUISHABLE in any of these figures. Per-plate material verification
+    does NOT live here — it lives in the 1:1 structural check in
+    tests/check_depletion_zoning.py (material count == meat cell count, every
+    cell a distinct material, and set equality against get_zoned_fuels()).
+    Do not treat these plots as evidence that the per-plate split is correct.
+
+    Every material is still assigned a colour — the returned `colors` dict
+    covers all 12,280 — resolved through the material NAME, so the mapping never
+    depends on dict ordering or object identity.
     """
     by_name = {m.name: m for m in get_zoned_fuels()}
     colors = dict(MUTED_COLORS)
     key_rgb = {}
-    ramp = zone_ramp()
 
     for idx, elem in enumerate(CANONICAL_ELEMENTS):
-        for k in range(N_AXIAL_ZONES):
-            name = f'fuel_{elem}_z{k}'
-            rgb = ramp[k] if mode == 'zone' else element_zone_rgb(idx, k)
-            colors[by_name[name]] = rgb
-            key_rgb[(elem, k)] = rgb
+        n_plates = (N_CTRL_FUEL_PLATES if elem in CTRL_ELEMENT_IDS
+                    else N_PLATES_STD)
+        for j in range(N_X_ZONES):
+            for k in range(N_AXIAL_ZONES):
+                rgb = (zone_xz_rgb(j, k) if mode == 'zone'
+                       else element_zone_rgb(idx, j, k))
+                key_rgb[(elem, j, k)] = rgb
+                for i in range(n_plates):
+                    colors[by_name[f'fuel_{elem}_p{i}_x{j}_z{k}']] = rgb
     return colors, key_rgb
 
 
 # ── Slice locations, derived from the core map ───────────────────────────────
 
-_LL_X, _LL_Y = -4.0 * PITCH_X, -4.5 * PITCH_Y
+# Lattice lower_left, DERIVED from the lattice envelope (CORE_HALF_X/Y are
+# lattice half-extents despite the name), never hardcoded.
+#
+# This was `-4.0 * PITCH_X, -4.5 * PITCH_Y` until 2026-08-12 — the extent of the
+# pre-B4 8x9 lattice INCLUDING its water ring. B4 reduced the lattice to the 6x7
+# core positions, which left this origin exactly ONE PITCH CELL off in both x
+# and y (30.8 vs 23.1; 36.45 vs 28.35). Every slice location derived from it —
+# the XZ/YZ slices, the XY zoom block, the row panels, the x zone annotations —
+# was therefore a full element out of position, and probe_slice_locations()
+# refused to plot because the slices landed in water and graphite instead of
+# fuel meat. The identical fix was applied to check_depletion_zoning.py when B4
+# landed; plot_core.py was missed, and has been unable to regenerate since.
+_LL_X, _LL_Y = -CORE_HALF_X, -CORE_HALF_Y
 _NROWS = len(CORE_MAP)
 
 
@@ -459,14 +674,36 @@ def zone_midplane_z(k):
     return MEAT_BOT_Z + (k + 0.5) * MEAT_ZONE_HEIGHT
 
 
-def annotate_depletion_zones(ax, x_half, color='white'):
-    """Dashed lines on the N-1 interior zone boundaries, plus z0..z{N-1} labels."""
+def annotate_depletion_zones(ax, x_half, color='white', element_x_centers=None):
+    """Dashed lines on the interior zone boundaries, plus sparse z labels.
+
+    z boundaries are GLOBAL — the meat spans the same z in every element — so
+    they are drawn as plain axhlines.
+
+    x boundaries are NOT global. meat_left/meat_right are built inside each
+    element universe, so an element's zone planes sit at its own centre plus
+    MEAT_LEFT_X + j*MEAT_ZONE_WIDTH. Drawing a global axvline at x = 0 would be
+    correct only for an element centred on the origin and wrong everywhere else.
+    Pass `element_x_centers` (the global x of each element in the slice) to get
+    them drawn per element; omit it and no x lines are drawn.
+
+    Labels are thinned at high zone counts — 20 stacked z labels is noise.
+    """
     for k in range(1, N_AXIAL_ZONES):
         ax.axhline(MEAT_BOT_Z + k * MEAT_ZONE_HEIGHT,
                    color=color, lw=0.8, ls='--', alpha=0.8)
     for z in (MEAT_BOT_Z, MEAT_TOP_Z):
         ax.axhline(z, color=color, lw=1.1, ls='-', alpha=0.65)
-    for k in range(N_AXIAL_ZONES):
+
+    if element_x_centers:
+        for cx in element_x_centers:
+            for j in range(1, N_X_ZONES):
+                ax.axvline(cx + MEAT_LEFT_X + j * MEAT_ZONE_WIDTH,
+                           color=color, lw=0.5, ls=':', alpha=0.55)
+            for edge in (MEAT_LEFT_X, MEAT_RIGHT_X):
+                ax.axvline(cx + edge, color=color, lw=0.8, ls='-', alpha=0.5)
+
+    for k in zone_panel_indices():
         ax.text(-x_half + 0.5, zone_midplane_z(k), f'z{k}',
                 color=color, fontsize=7.5, va='center', ha='left',
                 fontweight='bold',
@@ -519,24 +756,59 @@ def probe_slice_locations(geom):
 
 # ── Views ────────────────────────────────────────────────────────────────────
 
-def _zone_legend_handles():
-    ramp = zone_ramp()
-    return [mpatches.Patch(
-                facecolor=tuple(c / 255.0 for c in ramp[k]),
-                edgecolor='#333', lw=0.5,
-                label=f'z{k}  [{MEAT_BOT_Z + k * MEAT_ZONE_HEIGHT:+.1f}, '
-                      f'{MEAT_BOT_Z + (k + 1) * MEAT_ZONE_HEIGHT:+.1f}] cm'
-                      + ('  (bottom)' if k == 0 else
-                         '  (top)' if k == N_AXIAL_ZONES - 1 else ''))
-            for k in range(N_AXIAL_ZONES)]
+def add_zone_colorbars(fig, mode):
+    """Two small colourbars — x index and z index — in place of a legend.
+
+    A categorical legend cannot work here: N_X_ZONES * N_AXIAL_ZONES is 160 at
+    the default. These key the two axes of the encoding separately, which is how
+    the colours are actually constructed.
+    """
+    # x key: hue sweep at the mid-z lightness (mode 'zone'), or the saturation
+    # ramp at a fixed reference hue (mode 'element').
+    k_mid = N_AXIAL_ZONES // 2
+    if mode == 'zone':
+        x_row = [zone_xz_rgb(j, k_mid) for j in range(N_X_ZONES)]
+        x_title = f'x zone index  (hue)   {MEAT_ZONE_WIDTH:g} cm each'
+        z_row = [zone_xz_rgb(0, k) for k in range(N_AXIAL_ZONES)]
+        z_title = f'z zone index  (lightness)   {MEAT_ZONE_HEIGHT:g} cm each'
+    else:
+        x_row = [element_zone_rgb(0, j, k_mid) for j in range(N_X_ZONES)]
+        x_title = f'x zone index  (saturation)   {MEAT_ZONE_WIDTH:g} cm each'
+        z_row = [element_zone_rgb(0, 0, k) for k in range(N_AXIAL_ZONES)]
+        z_title = f'z zone index  (value)   {MEAT_ZONE_HEIGHT:g} cm each'
+
+    # Two bars inside the reserved band, with room for each bar's title above
+    # it. Positions derive from CBAR_BAND_BOTTOM/TOP rather than being magic
+    # numbers, so the band and the space the callers reserve cannot drift apart.
+    _bar_h = 0.026
+    _slot = (CBAR_BAND_TOP - CBAR_BAND_BOTTOM) / 2.0
+    for row, title, y0 in ((x_row, x_title, CBAR_BAND_BOTTOM + _slot),
+                           (z_row, z_title, CBAR_BAND_BOTTOM)):
+        cax = fig.add_axes((0.13, y0, 0.74, _bar_h))
+        n = len(row)
+        for i, rgb in enumerate(row):
+            cax.add_patch(mpatches.Rectangle(
+                (i / n, 0.0), 1.0 / n, 1.0,
+                facecolor=tuple(c / 255.0 for c in rgb), edgecolor='none'))
+        cax.set_xlim(0, 1)
+        cax.set_ylim(0, 1)
+        cax.set_yticks([])
+        # tick the ends and the middle only — one tick per zone is unreadable
+        ticks = sorted({0, n // 2, n - 1})
+        cax.set_xticks([(t + 0.5) / n for t in ticks])
+        cax.set_xticklabels([str(t) for t in ticks], fontsize=7)
+        cax.set_title(title, fontsize=7.5, pad=2)
+        for s in cax.spines.values():
+            s.set_linewidth(0.5)
 
 
 def _mode_note(mode):
-    return ('all elements share one colour per zone — every horizontal band '
-            'must run UNBROKEN across the core'
+    return ('all elements share one colour per (x, z) zone: hue = x index, '
+            'lightness = z index — every horizontal band must run UNBROKEN '
+            'across the core, and the hue order must repeat inside every element'
             if mode == 'zone' else
-            'hue = element, dark (bottom) -> light (top) within each element — '
-            'adjacent columns must never share a hue')
+            'hue = element, saturation by x, dark (bottom) -> light (top) by z '
+            '— adjacent columns must never share a hue')
 
 
 def plot_axial_view(geom, colors, mode, basis, f, fname):
@@ -545,32 +817,41 @@ def plot_axial_view(geom, colors, mode, basis, f, fname):
         origin, width = (0.0, ZONE_XZ_Y, 0.0), (W_AX_CROP, MAIN_AX_H)
         where = f'y = {ZONE_XZ_Y:.2f} cm  (core-map row {ZONE_XZ_ROW} centre)'
         xlabel, x_half = 'x  (cm)', W_AX_CROP / 2
+        # The x zone cuts are visible in this basis, one set per element.
+        centers = [col_center_x(j)
+                   for j, t in enumerate(CORE_MAP[ZONE_XZ_ROW])
+                   if t in ('S', 'C')]
+        x_note = f'{N_X_ZONES} x zones x {MEAT_ZONE_WIDTH:g} cm (dotted)'
     else:
         origin, width = (ZONE_YZ_X, 0.0, 0.0), (W_YZ_CROP, MAIN_AX_H)
         where = f'x = {ZONE_YZ_X:.2f} cm  (core-map column {ZONE_YZ_COL} centre)'
         xlabel, x_half = 'y  (cm)', W_YZ_CROP / 2
+        # A YZ slice sits at ONE x, so it cuts a single x zone — there are no x
+        # boundaries to draw. Say which zone it samples instead.
+        centers = None
+        _j = min(int((ZONE_YZ_X - col_center_x(ZONE_YZ_COL) - MEAT_LEFT_X)
+                     // MEAT_ZONE_WIDTH), N_X_ZONES - 1)
+        x_note = f'slice samples x zone x{max(_j, 0)} only'
 
     fig, ax = plt.subplots(figsize=(13, 9))
     geom.plot(basis=basis, origin=origin, width=width, pixels=(1500, 1700),
               axes=ax, color_by='material', colors=colors)
     ax.set_title(
         f'Depletion zones — {basis.upper()}  {where}\n'
-        f'{N_AXIAL_ZONES} axial zones x {MEAT_ZONE_HEIGHT:g} cm, '
-        f'blade withdrawn f = {f:.1f}   |   mode "{mode}": {_mode_note(mode)}',
-        fontsize=10)
-    ax.set_xlabel(xlabel, fontsize=9)
+        f'{N_X_ZONES} x {N_AXIAL_ZONES} zones '
+        f'({MEAT_ZONE_WIDTH:g} x {MEAT_ZONE_HEIGHT:g} cm), {x_note}, '
+        f'blade withdrawn f = {f:.1f}\nmode "{mode}": {_mode_note(mode)}',
+        fontsize=9.5)
+    # No x-axis label on colourbar-bearing figures: it duplicates the tick
+    # values immediately above it and it is the text that used to overprint the
+    # upper colourbar's title. The slice location is already in the title.
     ax.set_ylabel('z  (cm)', fontsize=9)
-    annotate_depletion_zones(ax, x_half=x_half)
+    annotate_depletion_zones(ax, x_half=x_half, element_x_centers=centers)
 
-    if mode == 'zone':
-        ax.legend(handles=_zone_legend_handles(), loc='upper right',
-                  fontsize=8, framealpha=0.9, title='Axial depletion zone',
-                  title_fontsize=8)
+    fig.subplots_adjust(bottom=CBAR_BAND_TOP)
+    add_zone_colorbars(fig, mode)
 
-    out = os.path.join(OUT_DIR, fname)
-    fig.savefig(out, dpi=150, bbox_inches='tight')
-    plt.close(fig)
-    return out
+    return _save_zone_figure(fig, fname)
 
 
 # XY midplane panels are ZOOMED to a 2x2 element block, not the full core.
@@ -588,38 +869,45 @@ ZOOM_COLS = (2, 3)      # core-map cols — B4 (control) + C4/B5/C5 (standard)
 
 
 def plot_zone_midplanes(geom, colors, mode, f, fname):
-    """One XY panel per zone, at that zone's axial midplane, zoomed to 2x2."""
+    """XY panels at a DERIVED selection of zone midplanes, zoomed to 2x2.
+
+    Bottom / middle / top only — see zone_panel_indices(). One panel per axial
+    zone would be 4.1 in x N_AXIAL_ZONES wide, i.e. 82 inches at the default.
+    In this basis the x zone cuts are visible as vertical bands across each
+    element's 6.3 cm meat width.
+    """
     cx = 0.5 * (col_center_x(ZOOM_COLS[0]) + col_center_x(ZOOM_COLS[1]))
     cy = 0.5 * (row_center_y(ZOOM_ROWS[0]) + row_center_y(ZOOM_ROWS[1]))
     width = (2 * PITCH_X, 2 * PITCH_Y)
     block = ', '.join(core_map_label(i, j)
                       for i in ZOOM_ROWS for j in ZOOM_COLS)
 
-    fig, axes = plt.subplots(
-        1, N_AXIAL_ZONES, figsize=(4.1 * N_AXIAL_ZONES, 5.2))
-    axes = [axes] if N_AXIAL_ZONES == 1 else list(axes)
+    panels = zone_panel_indices()
+    fig, axes = plt.subplots(1, len(panels), figsize=(4.1 * len(panels), 5.2))
+    axes = [axes] if len(panels) == 1 else list(axes)
 
-    for k, ax in enumerate(axes):
+    for ax, k in zip(axes, panels):
         zc = zone_midplane_z(k)
         geom.plot(basis='xy', origin=(cx, cy, zc), width=width,
                   pixels=(900, 950), axes=ax, color_by='material', colors=colors)
         ax.set_title(f'z{k}   z = {zc:+.1f} cm', fontsize=10)
-        ax.set_xlabel('x  (cm)', fontsize=8)
-        ax.set_ylabel('y  (cm)' if k == 0 else '', fontsize=8)
+        # No per-panel x label: it duplicates the tick values directly above it,
+        # and on the middle panel it overprints the colourbar band below.
+        ax.set_ylabel('y  (cm)' if k == panels[0] else '', fontsize=8)
         ax.tick_params(labelsize=7)
 
     fig.suptitle(
-        f'Depletion zones — XY at each zone midplane, zoomed to elements '
-        f'{block}\n({N_AXIAL_ZONES} zones x {MEAT_ZONE_HEIGHT:g} cm, '
-        f'f = {f:.1f})   |   mode "{mode}": {_mode_note(mode)}\n'
+        f'Depletion zones — XY at selected zone midplanes, zoomed to elements '
+        f'{block}\n({N_X_ZONES} x {N_AXIAL_ZONES} zones, '
+        f'{MEAT_ZONE_WIDTH:g} x {MEAT_ZONE_HEIGHT:g} cm, f = {f:.1f}; '
+        f'panels z{panels} of {N_AXIAL_ZONES} — bottom/middle/top)\n'
+        f'mode "{mode}": {_mode_note(mode)}\n'
         f'zoomed because meat is {MEAT_THICK} cm against a 75.9 cm core '
-        f'(1:1488) — sub-pixel at full-core scale', fontsize=10)
-    fig.tight_layout(rect=(0, 0, 1, 0.87))
+        f'(1:1488) — sub-pixel at full-core scale', fontsize=9.5)
+    fig.tight_layout(rect=(0, CBAR_BAND_TOP, 1, 0.85))
+    add_zone_colorbars(fig, mode)
 
-    out = os.path.join(OUT_DIR, fname)
-    fig.savefig(out, dpi=150, bbox_inches='tight')
-    plt.close(fig)
-    return out
+    return _save_zone_figure(fig, fname)
 
 
 def plot_row_panels(geom, colors, mode, f, fname):
@@ -647,32 +935,43 @@ def plot_row_panels(geom, colors, mode, f, fname):
                            for j, t in enumerate(CORE_MAP[i])
                            if t in ('S', 'C', 'F'))
         ax.set_title(f'row {i}   y = {y:+.2f} cm\n{members}', fontsize=8.5)
-        ax.set_xlabel('x  (cm)', fontsize=8)
+        # No per-panel x label — see the note in plot_zone_midplanes.
         ax.set_ylabel('z  (cm)' if i == fuel_rows[0] else '', fontsize=8)
         ax.tick_params(labelsize=7)
         for k in range(1, N_AXIAL_ZONES):
             ax.axhline(MEAT_BOT_Z + k * MEAT_ZONE_HEIGHT,
                        color='white', lw=0.7, ls='--', alpha=0.8)
+        # x cuts are element-local: offset from each element's own centre.
+        for j_col, t in enumerate(CORE_MAP[i]):
+            if t not in ('S', 'C'):
+                continue
+            for j in range(1, N_X_ZONES):
+                ax.axvline(col_center_x(j_col) + MEAT_LEFT_X
+                           + j * MEAT_ZONE_WIDTH,
+                           color='white', lw=0.4, ls=':', alpha=0.5)
 
     fig.suptitle(
         f'Depletion zones — XZ through every fuel row (all 28 elements, '
-        f'f = {f:.1f})\nmode "{mode}": {_mode_note(mode)}', fontsize=11)
-    fig.tight_layout(rect=(0, 0, 1, 0.88))
+        f'f = {f:.1f})\n{N_X_ZONES} x {N_AXIAL_ZONES} zones, '
+        f'{MEAT_ZONE_WIDTH:g} x {MEAT_ZONE_HEIGHT:g} cm\n'
+        f'mode "{mode}": {_mode_note(mode)}', fontsize=10)
+    fig.tight_layout(rect=(0, CBAR_BAND_TOP, 1, 0.86))
+    add_zone_colorbars(fig, mode)
 
-    out = os.path.join(OUT_DIR, fname)
-    fig.savefig(out, dpi=150, bbox_inches='tight')
-    plt.close(fig)
-    return out
+    return _save_zone_figure(fig, fname)
 
 
 def plot_element_hue_map(fname='depletion_zones_element_huemap.png'):
     """Mode-B key: element hues laid out on the core grid (A-F x 1-7).
 
-    140 legend entries is not a legend. This is the readable substitute, and
-    doubles as a core map.
+    28 x N_X_ZONES x N_AXIAL_ZONES legend entries is not a legend. This is the readable substitute, and
+    doubles as a core map. Each cell is drawn at the element's mid (x, z) zone,
+    so it keys the HUE only — the saturation/value ramps are keyed by the
+    colourbars on the slice views.
     """
     fig, ax = plt.subplots(figsize=(7.6, 8.6))
-    mid = (N_AXIAL_ZONES - 1) / 2.0
+    mid_x = (N_X_ZONES - 1) // 2
+    mid_z = (N_AXIAL_ZONES - 1) // 2
 
     for i, row in enumerate(CORE_MAP):
         for j, token in enumerate(row):
@@ -682,7 +981,7 @@ def plot_element_hue_map(fname='depletion_zones_element_huemap.png'):
             if token in ('S', 'C'):
                 idx = CANONICAL_ELEMENTS.index(label)
                 face = tuple(c / 255.0 for c in
-                             element_zone_rgb(idx, int(round(mid))))
+                             element_zone_rgb(idx, mid_x, mid_z))
                 txt, tcol = f'{label}\n{token}', 'white'
             else:
                 face = {'G': (0.29, 0.29, 0.29),
@@ -697,12 +996,24 @@ def plot_element_hue_map(fname='depletion_zones_element_huemap.png'):
             ax.text(j, -i, txt, ha='center', va='center', fontsize=8.5,
                     color=tcol, fontweight='bold')
 
-    ax.set_xlim(0.5, 6.5)
-    ax.set_ylim(-7.5, -0.5)
-    ax.set_xticks(range(1, 7))
-    ax.set_xticklabels(list('ABCDEF'), fontsize=11)
-    ax.set_yticks([-i for i in range(1, 8)])
-    ax.set_yticklabels([str(i) for i in range(1, 8)], fontsize=11)
+    # Axis limits and ticks DERIVED from CORE_MAP, matching the 0-based cell
+    # centres the rectangles above are drawn on: cell (i, j) is centred at
+    # (j, -i).
+    #
+    # These were hardcoded to xlim (0.5, 6.5) / ylim (-7.5, -0.5) with ticks at
+    # 1..6 and 1..7 — one-based centres, from before B4 re-indexed core_map_label
+    # to 0-based lattice positions. The mismatch shifted every label one cell up
+    # and left of the tile it names: the tile at grid (A, 1) was labelled B2,
+    # column A and row 7 fell outside the visible limits entirely, and the A6
+    # flux trap floated outside the grid. Deriving from CORE_MAP means a future
+    # lattice change cannot reintroduce the shift.
+    _n_rows, _n_cols = len(CORE_MAP), len(CORE_MAP[0])
+    ax.set_xlim(-0.5, _n_cols - 0.5)
+    ax.set_ylim(-(_n_rows - 1) - 0.5, 0.5)
+    ax.set_xticks(range(_n_cols))
+    ax.set_xticklabels(list(CORE_MAP_COLS[:_n_cols]), fontsize=11)
+    ax.set_yticks([-i for i in range(_n_rows)])
+    ax.set_yticklabels([str(i + 1) for i in range(_n_rows)], fontsize=11)
     ax.xaxis.set_ticks_position('top')
     ax.set_aspect('equal')
     for s in ax.spines.values():
@@ -714,10 +1025,7 @@ def plot_element_hue_map(fname='depletion_zones_element_huemap.png'):
         'shown at the mid zone; row 1 is the +y edge',
         fontsize=10.5, pad=26)
 
-    out = os.path.join(OUT_DIR, fname)
-    fig.savefig(out, dpi=150, bbox_inches='tight')
-    plt.close(fig)
-    return out
+    return _save_zone_figure(fig, fname)
 
 
 def plot_depletion_zones(mode):
@@ -730,7 +1038,7 @@ def plot_depletion_zones(mode):
     geom_f0 = build_core_geometry(withdrawn_fraction=0.0, depletion_zoning=True)
 
     print(f"\nDepletion zone plots — mode '{mode}', "
-          f"N_AXIAL_ZONES = {N_AXIAL_ZONES}")
+          f"N_X_ZONES x N_AXIAL_ZONES = {N_X_ZONES} x {N_AXIAL_ZONES}")
     print("  slice probes:")
     for line in probe_slice_locations(geom):
         print(line)
@@ -738,20 +1046,38 @@ def plot_depletion_zones(mode):
     colors, key_rgb = build_zone_colors(mode)
 
     # Self-checks: the artifact verifies itself whenever it is regenerated.
+    # NOTE two DIFFERENT cardinalities here, and they are not interchangeable:
+    #   n_materials = 614 x N_X x N_Z  — one per meat cell (per plate)
+    #   n_colours   =  28 x N_X x N_Z  — one per (element, x, z); plate not encoded
     zoned = get_zoned_fuels()
-    expected = N_ELEMENTS * N_AXIAL_ZONES
-    assert len(zoned) == expected, \
-        f"expected {expected} zoned materials, found {len(zoned)}"
+    n_materials = N_PLATES_TOTAL * N_X_ZONES * N_AXIAL_ZONES
+    n_colours   = N_ELEMENTS * N_X_ZONES * N_AXIAL_ZONES
+    assert len(zoned) == n_materials, \
+        f"expected {n_materials} zoned materials, found {len(zoned)}"
+    # COVERAGE: every one of the per-plate materials must be painted. This is
+    # stronger than the old check — under element-shared materials there were
+    # only 560 to cover; now it is 12,280 and a missed plate would render as an
+    # unpainted cell rather than silently inheriting a neighbour's colour.
     assert all(m in colors for m in zoned), \
-        "colour dict does not cover every zoned material"
-    assert len(key_rgb) == expected, \
-        f"colour keys {len(key_rgb)} != {expected}"
-    if mode == 'element':
-        assert len(set(key_rgb.values())) == expected, \
-            "two distinct (element, zone) keys share an RGB in mode 'element'"
-    print(f"  [OK] {len(zoned)} zoned materials, all coloured"
-          + ("; all RGBs distinct" if mode == 'element' else
-             f"; {N_AXIAL_ZONES} shared zone colours"))
+        (f"colour dict does not cover every zoned material: "
+         f"{sum(1 for m in zoned if m not in colors)} of {len(zoned)} unpainted")
+    assert len(key_rgb) == n_colours, \
+        f"colour keys {len(key_rgb)} != {n_colours}"
+    # Two elements sharing a hue is what HUE_STRIDE exists to prevent.
+    hues = {element_hue(i) for i in range(N_ELEMENTS)}
+    assert len(hues) == N_ELEMENTS, \
+        f"two elements share a hue: {len(hues)} distinct of {N_ELEMENTS}"
+    # LEGIBILITY, not 8-bit distinctness. The assertion that used to sit here
+    # required every (element, x, z) key to map to a distinct 8-bit RGB. It
+    # passed at 8 x 40 — 8,960 mathematically distinct colours — while the
+    # figure was unreadable. Replaced 2026-08-12 by a check on the ramp step,
+    # which is the quantity that actually governs whether adjacent zones can be
+    # told apart. See MIN_PERCEPTUAL_RAMP_STEP.
+    check_ramp_legibility(mode)
+    print(f"  [OK] {len(zoned)} zoned materials, all coloured; "
+          f"{n_colours} colours ({N_ELEMENTS} element hues x {N_X_ZONES} x "
+          f"{N_AXIAL_ZONES} zones); plates share colour by design — per-plate "
+          f"verification is in check_depletion_zoning.py, not here")
 
     written = [
         plot_axial_view(geom, colors, mode, 'xz', 1.0,
