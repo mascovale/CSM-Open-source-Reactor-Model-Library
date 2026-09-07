@@ -4,6 +4,17 @@ OpenMC model of the IAEA TECDOC-643 Appendix A-2 generic 10 MW LEU research reac
 core. The model is currently organized as a flat collection of Python modules and
 scripts; it is not packaged for installation with `pip`.
 
+## Model description
+
+The model represents a fresh-core, continuous-energy OpenMC eigenvalue calculation
+for a generic 10 MW plate-fuel research reactor. Its 6-by-7 lattice contains standard
+fuel elements, control elements with moving B4C absorber blades, graphite reflector
+blocks, and two aluminum flux-trap blocks. Fuel plates use U3Si2-Al fuel with aluminum
+cladding; core coolant, pool water, end-box homogenate, structural aluminum, and
+graphite are represented as separate materials. The lattice is surrounded by an
+explicit water pool and vacuum boundary. The primary result is the effective
+neutron multiplication factor, `keff`, with flux and reaction-rate tallies attached.
+
 ## Requirements
 
 - Python 3.10 or newer
