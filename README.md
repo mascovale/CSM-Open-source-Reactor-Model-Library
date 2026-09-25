@@ -11,7 +11,6 @@ run separately; there is no shared Python package or repository-wide launcher.
 | [`iaea-tecdoc-core/`](iaea-tecdoc-core/README.md) | IAEA TECDOC-643 Appendix A-2 generic 10 MW LEU research reactor OpenMC model | Implemented |
 | [`hp-mr/`](hp-mr/README.md) | High-power microreactor model | Reserved project directory |
 | [`lunar-fsp-microreactor/`](lunar-fsp-microreactor/README.md) | Lunar FSP microreactor model | Reserved project directory |
-| [`marvel/`](marvel/README.md) | MARVEL reactor model | Reserved project directory |
 | [`msre/`](msre/README.md) | Molten Salt Reactor Experiment model | Reserved project directory |
 | [`pebble-bed-htgr/`](pebble-bed-htgr/README.md) | Pebble-bed high-temperature gas reactor model | Reserved project directory |
 | [`radiant-kaleidos/`](radiant-kaleidos/README.md) | Radiant Kaleidos microreactor model | Reserved project directory |
