@@ -3,3 +3,6 @@ references
 
 # Python bytecode
 __pycache__/
+
+# Packaging and run outputs
+*.egg-info/

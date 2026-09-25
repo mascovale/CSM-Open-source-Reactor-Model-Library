@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "marvel"
+version = "0.1.0"
+description = "OpenMC model of the MARVEL microreactor"
+requires-python = ">=3.11"
+dependencies = ["openmc>=0.15.3", "numpy"]
+
+[tool.setuptools.packages.find]
+include = ["marvel*"]
