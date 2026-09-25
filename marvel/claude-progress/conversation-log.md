@@ -4,6 +4,8 @@ Verbatim log of every user prompt and Claude Code response in this project,
 with the local date and time of each entry. Entries are appended automatically
 by Claude Code hooks (`.claude/settings.json` → `.claude/hooks/log_conversation.py`):
 
+- **Slash command** entries record local commands that change how Claude runs (currently
+  `/effort`), with their output, at the time they were issued.
 - **User prompt** entries are written when a prompt is submitted (UserPromptSubmit hook).
 - **Claude response** entries are written when Claude finishes its turn (Stop hook) and
   contain all the text Claude displayed during that turn. The header shows the
@@ -11,6 +13,28 @@ by Claude Code hooks (`.claude/settings.json` → `.claude/hooks/log_conversatio
   Tool calls and tool output are not included; the full session transcripts live in `~/.claude/projects/`.
 
 Model: Claude Opus 5.5 (claude-opus-5-5), via Claude Code.
+
+---
+
+### Slash command `/effort` — 2026-09-24 23:19:25 MDT
+<!-- cmd:8228dd54-7829-4730-95af-0e7b37b4947f -->
+
+```
+/effort
+```
+
+Output: Set effort level to high (saved as your default for new sessions): Comprehensive implementation with extensive testing and documentation · burns fastest — medium handles most tasks
+
+---
+
+### Slash command `/effort` — 2026-09-24 23:19:38 MDT
+<!-- cmd:b106e2a5-64ed-4ac5-bd94-a4e12c06310f -->
+
+```
+/effort
+```
+
+Output: Set effort level to medium (saved as your default for new sessions): Balanced approach with standard implementation and testing
 
 ---
 
@@ -68,3 +92,15 @@ Now I'll test it and add the execution time to the first response, which ran fro
 ### User prompt — 2026-09-24 23:28:18 MDT
 
 We are using OpenMC 0.15.3 (present in vm-dev) and ENDF/B-VIII.1 (default in vm-dev). Go ahead and commit and push.
+
+---
+
+### Claude response (execution time: 0m 52s) — 2026-09-24 23:29:09 MDT
+
+OpenMC 0.15.3 is installed, and the environment points to the ENDF/B-VIII.1 cross-section library. Next I'll commit and push.
+
+---
+
+### User prompt — 2026-09-24 23:29:44 MDT
+
+Yes, log /effort changes

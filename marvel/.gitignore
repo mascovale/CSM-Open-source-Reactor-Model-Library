@@ -1,2 +1,5 @@
 # Ignore PDF references
 references
+
+# Python bytecode
+__pycache__/

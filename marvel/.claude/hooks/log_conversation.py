@@ -5,24 +5,72 @@ claude-progress/conversation-log.md.
 Called by Claude Code hooks (see .claude/settings.json):
   log_conversation.py prompt    <- UserPromptSubmit (prompt text on stdin JSON)
   log_conversation.py response  <- Stop (reads the session transcript)
+  log_conversation.py commands  <- SessionEnd (flushes pending slash commands)
+
+Local slash commands listed in LOGGED_COMMANDS (e.g. /effort) never reach the
+model, so they are picked up from the transcript on every hook call and
+logged once each, keyed by their transcript uuid.
 """
 import json
+import re
 import sys
 import time
 from datetime import datetime
 from pathlib import Path
 
 LOG = Path(__file__).resolve().parents[2] / "claude-progress" / "conversation-log.md"
+LOGGED_COMMANDS = {"/effort"}
 
 
 def now():
     return datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")
 
 
-def append(header, body):
+def append(header, body, stamp=None, marker=""):
     LOG.parent.mkdir(parents=True, exist_ok=True)
     with LOG.open("a", encoding="utf-8") as f:
-        f.write(f"\n---\n\n### {header} — {now()}\n\n{body.rstrip()}\n")
+        f.write(f"\n---\n\n### {header} — {stamp or now()}\n{marker}\n{body.rstrip()}\n")
+
+
+def read_transcript(transcript_path):
+    entries = []
+    for line in Path(transcript_path).read_text(encoding="utf-8").splitlines():
+        try:
+            entries.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return entries
+
+
+def tag(name, text):
+    m = re.search(rf"<{name}>(.*?)</{name}>", text, re.S)
+    return m.group(1).strip() if m else ""
+
+
+def log_commands(transcript_path):
+    """Log LOGGED_COMMANDS slash commands (with their output) not yet in the log."""
+    entries = read_transcript(transcript_path)
+    logged = LOG.read_text(encoding="utf-8") if LOG.exists() else ""
+    for i, e in enumerate(entries):
+        content = e.get("message", {}).get("content")
+        if e.get("type") != "user" or not isinstance(content, str):
+            continue
+        name = tag("command-name", content)
+        if name not in LOGGED_COMMANDS or f"<!-- cmd:{e.get('uuid')} -->" in logged:
+            continue
+        line = f"{name} {tag('command-args', content)}".strip()
+        output = next(
+            (tag("local-command-stdout", c.get("message", {}).get("content", ""))
+             for c in entries[i + 1:]
+             if c.get("parentUuid") == e.get("uuid")
+             and isinstance(c.get("message", {}).get("content"), str)),
+            "",
+        )
+        stamp = datetime.fromisoformat(e["timestamp"].replace("Z", "+00:00")).astimezone()
+        append(f"Slash command `{name}`",
+               f"```\n{line}\n```\n\nOutput: {output}" if output else f"```\n{line}\n```",
+               stamp=stamp.strftime("%Y-%m-%d %H:%M:%S %Z"),
+               marker=f"<!-- cmd:{e.get('uuid')} -->\n")
 
 
 def is_user_prompt(entry):
@@ -47,12 +95,7 @@ def format_duration(seconds):
 
 def response_text(transcript_path):
     """All assistant text since the last user prompt, and that prompt's time."""
-    entries = []
-    for line in Path(transcript_path).read_text(encoding="utf-8").splitlines():
-        try:
-            entries.append(json.loads(line))
-        except json.JSONDecodeError:
-            continue
+    entries = read_transcript(transcript_path)
     start = max((i for i, e in enumerate(entries) if is_user_prompt(e)), default=-1)
     texts = []
     for e in entries[start + 1:]:
@@ -70,6 +113,8 @@ def response_text(transcript_path):
 def main():
     mode = sys.argv[1]
     data = json.load(sys.stdin)
+    if data.get("transcript_path") and Path(data["transcript_path"]).exists():
+        log_commands(data["transcript_path"])
     if mode == "prompt":
         append("User prompt", data.get("prompt", ""))
     elif mode == "response":
